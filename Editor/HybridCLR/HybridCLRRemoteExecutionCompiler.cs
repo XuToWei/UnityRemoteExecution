@@ -87,8 +87,8 @@ namespace RemoteExecution.HybridCLR
             cancellationToken.ThrowIfCancellationRequested();
             string dynamicDirectory = Path.Combine(outputDirectory, "Dynamic");
             Directory.CreateDirectory(dynamicDirectory);
-            string sourcePath = Path.Combine(dynamicDirectory, assemblyName + ".cs");
-            string dllPath = Path.Combine(dynamicDirectory, assemblyName + ".dll");
+            string sourcePath = Path.Combine(dynamicDirectory, $"{assemblyName}.cs");
+            string dllPath = Path.Combine(dynamicDirectory, $"{assemblyName}.dll");
             File.WriteAllText(sourcePath, source, new UTF8Encoding(false));
 #pragma warning disable 0618
             var builder = new AssemblyBuilder(dllPath, sourcePath)
@@ -108,8 +108,7 @@ namespace RemoteExecution.HybridCLR
             cancellationToken.ThrowIfCancellationRequested();
             CompilerMessage[] diagnostics = await completion.Task;
             if (diagnostics.Any(item => item.type == CompilerMessageType.Error))
-                throw new InvalidOperationException("Dynamic source compilation failed:" + Environment.NewLine +
-                    string.Join(Environment.NewLine, diagnostics.Select(FormatDiagnostic)));
+                throw new InvalidOperationException($"Dynamic source compilation failed: {Environment.NewLine}{string.Join(Environment.NewLine, diagnostics.Select(FormatDiagnostic))}");
             if (!File.Exists(dllPath)) throw new FileNotFoundException("Dynamic source DLL was not produced.", dllPath);
             cancellationToken.ThrowIfCancellationRequested();
             string pdbPath = Path.ChangeExtension(dllPath, ".pdb");

@@ -58,7 +58,7 @@ public sealed class RemoteExecutionControls : MonoBehaviour
 
 `ConnectionState` reports `Disconnected`, `Connecting`, `Handshaking`, `Connected`, or `Faulted`; `IsConnected` is true only after the Editor acknowledges the protocol handshake. State-change callbacks run on Unity's main thread. `LastError` contains a stable code and message while faulted.
 
-`Start` validates the connector, client ID, timeouts, and optional transfer limits synchronously. The host/port overload and a missing custom connector use the bundled TCP transport. Calling it again with the same parameters while active does nothing; calling it after a fault retries, and calling it with different parameters replaces the current connection. There is no automatic reconnect, so the business layer controls retry timing and UI. `Stop` is safe to call repeatedly.
+`Start` validates the transport, client ID, timeouts, and optional transfer limits synchronously. The host/port overload and a missing custom transport use the bundled TCP transport. Calling it again with the same parameters while active does nothing; calling it after a fault retries, and calling it with different parameters replaces the current connection. There is no automatic reconnect, so the business layer controls retry timing and UI. `Stop` is safe to call repeatedly.
 
 The Player API is unavailable in Editor Play Mode. Start the Editor listener from **Window > Remote Execution**, then call `RemoteExecutionPlayerApi.Start` from a built Player. No `RemoteExecutionComponent` or settings asset is required.
 
@@ -68,22 +68,29 @@ The core protocol does not authenticate `ClientId`. Bundled TCP has no authentic
 
 ## Custom transports
 
-By default, the Player `Start(host, port, ...)` overload and the Editor window use TCP. For WebSocket or another protocol, business code implements `IRemoteExecutionConnector`, `IRemoteExecutionListener`, and the `IRemoteExecutionChannel` returned by both:
+By default, the Player `Start(host, port, ...)` overload and the Editor window use TCP. For WebSocket or another protocol, business code implements one `IRemoteExecutionTransport` type and creates separate client and server instances:
 
 ```csharp
-// Player: the connector may use WebSocket, IPC, or a project network library.
-var options = new RemoteExecutionPlayerOptions(
-    connector: new GameWebSocketConnector("wss://dev.example/remote"),
-    clientId: "Test Device");
-RemoteExecutionPlayerApi.Start(options);
+// Player: a client instance initiates the connection.
+var playerTransport = GameWebSocketTransport.CreateClient(
+    "wss://dev.example/remote"); // Kind returns "WebSocket".
+RemoteExecutionPlayerApi.Start(
+    new RemoteExecutionPlayerOptions(playerTransport, "Test Device"));
 
-// Editor: install the matching listener.
+// Editor: a separate server instance of the same implementation listens.
+var editorTransport = GameWebSocketTransport.CreateServer(
+    "wss://localhost:9443/remote");
 RemoteExecutionEditorApi.StartServer(
-    new RemoteExecutionServerOptions(
-        new GameWebSocketListener("wss://localhost:9443/remote")));
+    new RemoteExecutionServerOptions(editorTransport));
 ```
 
-`IRemoteExecutionChannel` carries complete `RemoteFrame` values and must provide reliable, lossless, strictly ordered delivery. The package performs at most one send and one receive concurrently. `Abort()` must promptly unblock pending I/O and, like `Dispose()`, be safely repeatable. A connector's `ConnectionKey` must stably represent all connection-relevant settings—URI, subprotocol, authentication profile, and so on—without containing secrets; equal keys are used for repeated-`Start` detection.
+`IRemoteExecutionTransport` defines both connecting and listening so the Player and Editor sides of one protocol cannot drift into separate contracts. Client and server use distinct instances; invoking a method unsupported by the configured role should throw `InvalidOperationException`. The Player/Editor API takes ownership and calls `Dispose()` on stop or replacement; disposal must promptly unblock pending endpoint operations.
+
+Each transport supplies a short, stable `Kind` such as `"TCP"`, `"WebSocket"`, or `"IPC"`. The Editor displays the active server transport's `Kind` through `RemoteExecutionEditorApi.TransportKind`; this value is not reported by a Player. `ConfigurationKey` identifies all connection-relevant settings for repeated Player `Start` comparison and must not contain secrets, while `Description` is endpoint-oriented display text that may change after binding an ephemeral port. Do not derive `Kind` by parsing either value.
+
+`IRemoteExecutionChannel` remains separate because one server transport can accept multiple Players, each requiring independent send/receive operations and lifecycle. Disposing the transport must not close channels it already returned; each session owns its channel.
+
+A channel carries complete `RemoteFrame` values and must provide reliable, lossless, strictly ordered delivery. The package performs at most one send and one receive concurrently. `Abort()` must promptly unblock pending I/O and, like `Dispose()`, be safely repeatable.
 
 For WebSocket, map one complete URX3 frame to one binary message: use `RemoteExecutionProtocol.EncodeFrame` for sending and `DecodeFrame` after receiving a complete message. Reassemble WebSocket fragments first and reject text messages. An unordered transport such as UDP must provide ordering, retransmission, duplicate suppression, and connection semantics beneath the channel contract.
 

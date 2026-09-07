@@ -314,8 +314,7 @@ namespace RemoteExecution
                 Task<RemoteCommandResult> execution = RemoteCommandRegistry.ExecuteAsync(
                     descriptor, context, commandCancellation.Token);
                 if (descriptor.RequiresMainThread && !execution.IsCompleted)
-                    Debug.LogWarning($"[Unity.RemoteExecution] command '{descriptor.Id}' continued asynchronously; " +
-                        "code after the first await is not guaranteed to run on the Unity main thread.");
+                    Debug.LogWarning($"[Unity.RemoteExecution] command '{descriptor.Id}' continued asynchronously; code after the first await is not guaranteed to run on the Unity main thread.");
                 RemoteCommandResult result = await execution.ConfigureAwait(false);
                 commandCancellation.Token.ThrowIfCancellationRequested();
                 SendCommandResult(generation, requestId, result);

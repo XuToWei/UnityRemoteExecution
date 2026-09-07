@@ -1,10 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net;
-using System.Net.Sockets;
 using System.Reflection;
-using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEditor;
@@ -54,7 +51,8 @@ namespace RemoteExecution
 
         private void OnEditorUpdate()
         {
-            IReadOnlyList<RemoteExecutionClientInfo> clients = RemoteExecutionEditorApi.GetClients();
+            IReadOnlyList<RemoteExecutionClientInfo> clients =
+                RemoteExecutionEditorApi.GetClients();
             var liveSessions = new HashSet<int>(clients.Select(client => client.Id));
             foreach (KeyValuePair<int, OperationState> pair in m_Operations.ToArray())
             {
@@ -73,32 +71,35 @@ namespace RemoteExecution
 
         private void OnGUI()
         {
-            IReadOnlyList<RemoteExecutionClientInfo> clients = RemoteExecutionEditorApi.GetClients();
-            DrawHeader();
+            IReadOnlyList<RemoteExecutionClientInfo> clients =
+                RemoteExecutionEditorApi.GetClients();
+            RemoteExecutionServerStatus serverStatus =
+                RemoteExecutionEditorApi.GetServerStatus();
+            DrawHeader(serverStatus);
             DrawSectionToolbar();
             EditorGUILayout.Space(6);
             switch (m_SelectedSection)
             {
                 case WindowSection.Basic:
-                    DrawBasicSection(clients);
+                    DrawBasicSection(clients, serverStatus);
                     break;
                 case WindowSection.Commands:
                     DrawCommandsSection(clients);
                     break;
                 default:
                     m_SelectedSection = WindowSection.Basic;
-                    DrawBasicSection(clients);
+                    DrawBasicSection(clients, serverStatus);
                     break;
             }
         }
 
-        private void DrawHeader()
+        private void DrawHeader(RemoteExecutionServerStatus serverStatus)
         {
             using (new EditorGUILayout.HorizontalScope())
             {
                 EditorGUILayout.LabelField("Unity Remote Execution", EditorStyles.boldLabel);
                 GUILayout.FlexibleSpace();
-                bool isRunning = RemoteExecutionEditorApi.IsServerRunning;
+                bool isRunning = serverStatus.IsRunning;
                 var statusStyle = new GUIStyle(EditorStyles.miniLabel)
                 {
                     fontStyle = FontStyle.Bold
@@ -111,7 +112,7 @@ namespace RemoteExecution
                         ? new Color(1f, 0.48f, 0.43f)
                         : new Color(0.72f, 0.10f, 0.08f));
                 GUILayout.Label(isRunning
-                    ? $"Listening · {RemoteExecutionEditorApi.ListenerDescription}"
+                    ? $"Listening · {serverStatus.TransportDescription}"
                     : "Stopped", statusStyle);
             }
         }
@@ -124,12 +125,13 @@ namespace RemoteExecution
                 ? (WindowSection)selected : WindowSection.Basic;
         }
 
-        private void DrawBasicSection(IReadOnlyList<RemoteExecutionClientInfo> clients)
+        private void DrawBasicSection(IReadOnlyList<RemoteExecutionClientInfo> clients,
+            RemoteExecutionServerStatus serverStatus)
         {
             m_BasicScroll = EditorGUILayout.BeginScrollView(m_BasicScroll);
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             EditorGUILayout.LabelField("Connection", EditorStyles.boldLabel);
-            DrawServerControls();
+            DrawServerControls(serverStatus);
             EditorGUILayout.EndVertical();
             EditorGUILayout.Space(6);
             DrawConnectedPlayersOverview(clients);
@@ -203,9 +205,19 @@ namespace RemoteExecution
                 EditorGUILayout.HelpBox(m_WindowStatus, MessageType.Error);
         }
 
-        private void DrawServerControls()
+        private void DrawServerControls(RemoteExecutionServerStatus serverStatus)
         {
-            using (new EditorGUI.DisabledScope(RemoteExecutionEditorApi.IsServerRunning))
+            bool isRunning = serverStatus.IsRunning;
+            string transportKind = isRunning
+                ? serverStatus.TransportKind
+                : RemoteExecutionTcpTransport.DefaultKind;
+            EditorGUILayout.LabelField("Transport Type", transportKind);
+            if (isRunning)
+            {
+                EditorGUILayout.LabelField(
+                    "Endpoint", serverStatus.TransportDescription);
+            }
+            else
             {
                 m_Address = EditorGUILayout.TextField("Bind Address", m_Address);
                 using (new EditorGUILayout.HorizontalScope())
@@ -215,19 +227,21 @@ namespace RemoteExecution
                     {
                         try
                         {
-                            m_Port = FindRandomAvailablePort(m_Address);
+                            m_Port = RemoteExecutionTcpTransport.FindRandomAvailablePort(
+                                m_Address);
                             m_WindowStatus = null;
                         }
                         catch (Exception exception)
                         {
-                            SetWindowStatus("Random port selection failed: " + exception.Message);
+                            SetWindowStatus(
+                                $"Random port selection failed: {exception.Message}");
                         }
                     }
                 }
             }
             using (new EditorGUILayout.HorizontalScope())
             {
-                using (new EditorGUI.DisabledScope(RemoteExecutionEditorApi.IsServerRunning))
+                using (new EditorGUI.DisabledScope(isRunning))
                 {
                     if (GUILayout.Button("Start"))
                     {
@@ -238,11 +252,11 @@ namespace RemoteExecution
                         }
                         catch (Exception exception)
                         {
-                            SetWindowStatus("Server start failed: " + exception.Message);
+                            SetWindowStatus($"Server start failed: {exception.Message}");
                         }
                     }
                 }
-                using (new EditorGUI.DisabledScope(!RemoteExecutionEditorApi.IsServerRunning))
+                using (new EditorGUI.DisabledScope(!isRunning))
                 {
                     if (GUILayout.Button("Stop"))
                     {
@@ -251,35 +265,6 @@ namespace RemoteExecution
                     }
                 }
             }
-        }
-
-        private static int FindRandomAvailablePort(string address)
-        {
-            if (!IPAddress.TryParse(address, out IPAddress ip))
-                throw new InvalidOperationException("Invalid bind address.");
-            byte[] randomBytes = new byte[2];
-            using (var random = RandomNumberGenerator.Create())
-            {
-                for (int attempt = 0; attempt < 128; attempt++)
-                {
-                    random.GetBytes(randomBytes);
-                    int port = 49152 +
-                        ((randomBytes[0] | randomBytes[1] << 8) & 0x3FFF);
-                    var listener = new TcpListener(ip, port);
-                    try
-                    {
-                        listener.Start();
-                        return port;
-                    }
-                    catch (SocketException exception) when (
-                        exception.SocketErrorCode == SocketError.AddressAlreadyInUse)
-                    {
-                    }
-                    finally { listener.Stop(); }
-                }
-            }
-            throw new InvalidOperationException(
-                "Could not find an available random port.");
         }
 
         private RemoteExecutionClientInfo DrawPlayerSelector(
@@ -376,7 +361,8 @@ namespace RemoteExecution
 
         private void DrawOperationFooter(RemoteExecutionClientInfo player, OperationState operation)
         {
-            if (player == null || operation == null || string.IsNullOrEmpty(operation.Status)) return;
+            if (player == null || operation == null ||
+                string.IsNullOrEmpty(operation.Status)) return;
             EditorGUILayout.Space(6);
             using (new EditorGUILayout.HorizontalScope(EditorStyles.helpBox))
             {
@@ -456,8 +442,7 @@ namespace RemoteExecution
                 }
                 catch (Exception exception)
                 {
-                    Debug.LogError($"[Unity.RemoteExecution] editor panel '{type.AssemblyQualifiedName}' " +
-                        $"could not be created: {exception.GetBaseException().Message}");
+                    Debug.LogError($"[Unity.RemoteExecution] editor panel '{type.AssemblyQualifiedName}' could not be created: {exception.GetBaseException().Message}");
                 }
             }
 
@@ -469,8 +454,7 @@ namespace RemoteExecution
                 if (entries.Length > 1)
                 {
                     string types = string.Join(", ", entries.Select(entry => entry.TypeIdentity));
-                    Debug.LogError($"[Unity.RemoteExecution] editor panel ID '{group.Key}' " +
-                        $"is duplicated: {types}");
+                    Debug.LogError($"[Unity.RemoteExecution] editor panel ID '{group.Key}' is duplicated: {types}");
                     foreach (PanelEntry entry in entries) entry.Dispose();
                     continue;
                 }
@@ -478,8 +462,7 @@ namespace RemoteExecution
             }
             foreach (PanelEntry invalid in candidates.Where(entry => !entry.IsValid))
             {
-                Debug.LogError($"[Unity.RemoteExecution] editor panel '{invalid.TypeIdentity}' " +
-                    $"has invalid metadata: {invalid.Error}");
+                Debug.LogError($"[Unity.RemoteExecution] editor panel '{invalid.TypeIdentity}' has invalid metadata: {invalid.Error}");
                 invalid.Dispose();
             }
             m_Panels.Sort(PanelEntry.Compare);
@@ -565,8 +548,7 @@ namespace RemoteExecution
                     try { disposable.Dispose(); }
                     catch (Exception exception)
                     {
-                        Debug.LogError($"[Unity.RemoteExecution] editor panel '{TypeIdentity}' " +
-                            $"dispose failed: {exception.Message}");
+                        Debug.LogError($"[Unity.RemoteExecution] editor panel '{TypeIdentity}' dispose failed: {exception.Message}");
                     }
                 }
             }
@@ -611,7 +593,8 @@ namespace RemoteExecution
                 if (OperationTask.IsCanceled)
                     Status = "Operation cancelled.";
                 else if (OperationTask.IsFaulted)
-                    Status = OperationTask.Exception?.GetBaseException().Message ?? "Operation failed.";
+                    Status = OperationTask.Exception?.GetBaseException().Message ??
+                        "Operation failed.";
                 else
                     Status = string.IsNullOrWhiteSpace(OperationTask.Result)
                         ? "Operation completed." : OperationTask.Result;

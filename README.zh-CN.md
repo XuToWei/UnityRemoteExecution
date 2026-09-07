@@ -58,7 +58,7 @@ public sealed class RemoteExecutionControls : MonoBehaviour
 
 `ConnectionState` 会返回 `Disconnected`、`Connecting`、`Handshaking`、`Connected` 或 `Faulted`；只有 Editor 完成协议握手后，`IsConnected` 才为 `true`。状态回调在 Unity 主线程触发。发生故障时，`LastError` 提供稳定的错误码和消息。
 
-`Start` 会同步校验连接器、客户端 ID、超时和可选传输限制。使用 host/port overload 或未提供自定义连接器时，包会使用默认 TCP。连接期间使用相同参数重复调用不会产生新连接；故障后再次调用会重试，传入不同参数则替换当前连接。包不会自动重连，重试时机和 UI 完全由业务层控制。`Stop` 可以安全地重复调用。
+`Start` 会同步校验 transport、客户端 ID、超时和可选传输限制。使用 host/port overload 或未提供自定义 transport 时，包会使用默认 TCP。连接期间使用相同参数重复调用不会产生新连接；故障后再次调用会重试，传入不同参数则替换当前连接。包不会自动重连，重试时机和 UI 完全由业务层控制。`Stop` 可以安全地重复调用。
 
 Player API 不支持 Editor Play Mode。先在 **Window > Remote Execution** 中启动 Editor 监听服务，再由构建后的 Player 调用 `RemoteExecutionPlayerApi.Start`。不需要添加 `RemoteExecutionComponent` 或创建配置资产。
 
@@ -68,22 +68,29 @@ Player API 不支持 Editor Play Mode。先在 **Window > Remote Execution** 中
 
 ## 自定义传输
 
-默认情况下，Player 的 `Start(host, port, ...)` 和 Editor 窗口都使用 TCP。需要 WebSocket 或其他协议时，业务层分别实现 `IRemoteExecutionConnector`、`IRemoteExecutionListener` 和它们返回的 `IRemoteExecutionChannel`：
+默认情况下，Player 的 `Start(host, port, ...)` 和 Editor 窗口都使用 TCP。需要 WebSocket 或其他协议时，业务层实现一个 `IRemoteExecutionTransport` 类型，并分别创建客户端和服务端实例：
 
 ```csharp
-// Player：connector 内部可以使用 WebSocket、IPC 或项目自己的网络库。
-var options = new RemoteExecutionPlayerOptions(
-    connector: new GameWebSocketConnector("wss://dev.example/remote"),
-    clientId: "Test Device");
-RemoteExecutionPlayerApi.Start(options);
+// Player：客户端实例主动连接。
+var playerTransport = GameWebSocketTransport.CreateClient(
+    "wss://dev.example/remote"); // Kind 返回 "WebSocket"。
+RemoteExecutionPlayerApi.Start(
+    new RemoteExecutionPlayerOptions(playerTransport, "Test Device"));
 
-// Editor：安装与 Player 匹配的 listener。
+// Editor：同一种实现的独立服务端实例负责监听。
+var editorTransport = GameWebSocketTransport.CreateServer(
+    "wss://localhost:9443/remote");
 RemoteExecutionEditorApi.StartServer(
-    new RemoteExecutionServerOptions(
-        new GameWebSocketListener("wss://localhost:9443/remote")));
+    new RemoteExecutionServerOptions(editorTransport));
 ```
 
-`IRemoteExecutionChannel` 传输完整的 `RemoteFrame`，必须保证可靠、无丢失且严格有序。包最多同时执行一次 send 和一次 receive；`Abort()` 必须立即解除等待中的 I/O，且与 `Dispose()` 一样可安全重复调用。connector 的 `ConnectionKey` 应稳定表示 URI、subprotocol、认证配置等所有连接参数，但不能包含 secret；相同 key 用于判断重复 `Start`。
+`IRemoteExecutionTransport` 同时规定主动连接和监听行为，避免同一协议的 Player/Editor 实现不一致。客户端和服务端使用独立实例；调用角色不支持的方法应抛出 `InvalidOperationException`。Player/Editor API 会接管 transport，并在停止或替换时调用 `Dispose()`；释放操作必须及时解除仍在等待的端点操作。
+
+每个 transport 都要提供简短且稳定的 `Kind`，例如 `"TCP"`、`"WebSocket"` 或 `"IPC"`。Editor 通过 `RemoteExecutionEditorApi.TransportKind` 展示当前服务端 transport 的 `Kind`；该值不是由 Player 上报。`ConfigurationKey` 用于表示全部连接配置并比较 Player 的重复 `Start`，且不得包含 secret；`Description` 是包含端点详情的展示文本，在绑定随机端口后可以变化。不要通过解析这两个值生成 `Kind`。
+
+`IRemoteExecutionChannel` 仍保持独立，因为一个服务端 transport 可以接受多个 Player，每个连接都需要独立的收发和生命周期。Transport 被释放后，已经返回的 channel 仍由会话自行管理，不能随 transport 一起关闭。
+
+Channel 传输完整的 `RemoteFrame`，必须保证可靠、无丢失且严格有序。包最多同时执行一次 send 和一次 receive；`Abort()` 必须立即解除等待中的 I/O，且与 `Dispose()` 一样可安全重复调用。
 
 WebSocket 推荐将一个完整 URX3 frame 映射为一个 binary message：发送时使用 `RemoteExecutionProtocol.EncodeFrame`，接收完整消息后使用 `DecodeFrame`。WebSocket fragment 必须先重组，text message 必须拒绝。UDP 等无序协议若要接入，必须由实现层补齐排序、重传、去重和连接语义。
 

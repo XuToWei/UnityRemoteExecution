@@ -127,14 +127,11 @@ namespace RemoteExecution
 
     public sealed class RemoteExecutionServerOptions
     {
-        public RemoteExecutionServerOptions(IRemoteExecutionListener listener,
+        public RemoteExecutionServerOptions(IRemoteExecutionTransport transport,
             int maxClients = 4, TimeSpan? handshakeTimeout = null)
         {
-            Listener = listener ?? throw new ArgumentNullException(nameof(listener));
-            ListenerDescription = listener.Description;
-            if (string.IsNullOrWhiteSpace(ListenerDescription))
-                throw new ArgumentException("Listener description is required.",
-                    nameof(listener));
+            Transport = transport ?? throw new ArgumentNullException(nameof(transport));
+
             if (maxClients < 1 || maxClients > 1024)
                 throw new ArgumentOutOfRangeException(nameof(maxClients));
             MaxClients = maxClients;
@@ -144,41 +141,37 @@ namespace RemoteExecution
                 throw new ArgumentOutOfRangeException(nameof(handshakeTimeout));
         }
 
-        public IRemoteExecutionListener Listener { get; }
-        internal string ListenerDescription { get; }
+        public IRemoteExecutionTransport Transport { get; }
         public int MaxClients { get; }
         public TimeSpan HandshakeTimeout { get; }
+    }
+
+    internal struct RemoteExecutionServerStatus
+    {
+        internal bool IsRunning;
+        internal string TransportKind;
+        internal string TransportDescription;
     }
 
     public static class RemoteExecutionEditorApi
     {
         public static bool IsServerRunning => RemoteExecutionServer.IsRunning;
-        public static string ListenerDescription =>
-            RemoteExecutionServer.ListenerDescription;
+        public static string TransportKind => RemoteExecutionServer.TransportKind;
+        public static string TransportDescription =>
+            RemoteExecutionServer.TransportDescription;
+
+        internal static RemoteExecutionServerStatus GetServerStatus()
+        {
+            return RemoteExecutionServer.GetStatus();
+        }
 
         public static void StartServer(string bindAddress = "127.0.0.1",
             int port = 38421, int maxClients = 4,
             TimeSpan? handshakeTimeout = null)
         {
-            RemoteExecutionTcpListener listener = null;
-            bool started = false;
-            try
-            {
-                listener = new RemoteExecutionTcpListener(bindAddress, port);
-                StartServer(new RemoteExecutionServerOptions(listener, maxClients,
-                    handshakeTimeout));
-                started = true;
-            }
-            finally
-            {
-                if (!started && listener != null)
-                {
-                    try { listener.Abort(); }
-                    catch (Exception) { }
-                    try { listener.Dispose(); }
-                    catch (Exception) { }
-                }
-            }
+            var transport = RemoteExecutionTcpTransport.CreateServer(bindAddress, port);
+            StartServer(new RemoteExecutionServerOptions(transport, maxClients,
+                handshakeTimeout));
         }
 
         public static void StartServer(RemoteExecutionServerOptions options)
@@ -197,15 +190,17 @@ namespace RemoteExecution
             return RemoteExecutionServer.GetClients();
         }
 
-        public static Task<RemoteExecutionResult> ExecuteCommandAsync(int sessionId, string commandId,
-            byte[] payload = null, string contentType = "")
+        public static Task<RemoteExecutionResult> ExecuteCommandAsync(
+            int sessionId, string commandId, byte[] payload = null,
+            string contentType = "")
         {
             return ExecuteCommandAsync(sessionId, commandId, payload, contentType,
                 CancellationToken.None);
         }
 
-        public static Task<RemoteExecutionResult> ExecuteCommandAsync(int sessionId, string commandId,
-            byte[] payload, string contentType, CancellationToken cancellationToken)
+        public static Task<RemoteExecutionResult> ExecuteCommandAsync(
+            int sessionId, string commandId, byte[] payload, string contentType,
+            CancellationToken cancellationToken)
         {
             return RemoteExecutionServer.ExecuteCommandAsync(sessionId, commandId, payload,
                 contentType, cancellationToken);

@@ -26,17 +26,35 @@ namespace RemoteExecution
         internal void StartConnection(RemoteExecutionPlayerConfiguration configuration)
         {
             if (configuration == null) throw new ArgumentNullException(nameof(configuration));
-            if (m_Destroying) return;
-            RemoteExecutionConnectionState state = RemoteExecutionPlayerApi.ConnectionState;
-            if (m_Configuration != null && m_Configuration.Equals(configuration) &&
-                (state == RemoteExecutionConnectionState.Connecting ||
-                 state == RemoteExecutionConnectionState.Handshaking ||
-                 state == RemoteExecutionConnectionState.Connected))
+            if (m_Destroying)
+            {
+                DisposeTransport(configuration.Transport);
                 return;
+            }
+            RemoteExecutionConnectionState state = RemoteExecutionPlayerApi.ConnectionState;
+            bool isActive = state == RemoteExecutionConnectionState.Connecting ||
+                state == RemoteExecutionConnectionState.Handshaking ||
+                state == RemoteExecutionConnectionState.Connected;
+            RemoteExecutionPlayerConfiguration previousConfiguration = m_Configuration;
+            bool sameConfiguration = previousConfiguration != null &&
+                previousConfiguration.Equals(configuration);
+            bool sameTransport = previousConfiguration != null &&
+                ReferenceEquals(previousConfiguration.Transport, configuration.Transport);
+            if (sameConfiguration && isActive)
+            {
+                if (!sameTransport) DisposeTransport(configuration.Transport);
+                return;
+            }
+            if (sameTransport && !sameConfiguration)
+                throw new InvalidOperationException(
+                    "Changed Player settings require a new transport instance.");
 
             long previousGeneration = m_Generation;
             RetireConnection();
             m_CommandHost.CancelConnection(previousGeneration);
+            if (previousConfiguration != null &&
+                !ReferenceEquals(previousConfiguration.Transport, configuration.Transport))
+                DisposeTransport(previousConfiguration.Transport);
             long generation = ++m_Generation;
             m_Configuration = configuration;
             try
@@ -64,11 +82,13 @@ namespace RemoteExecution
 
         internal void StopConnection()
         {
+            RemoteExecutionPlayerConfiguration configuration = m_Configuration;
             long previousGeneration = m_Generation;
             RetireConnection();
             m_CommandHost?.CancelConnection(previousGeneration);
             long generation = ++m_Generation;
             m_Configuration = null;
+            DisposeTransport(configuration?.Transport);
             ClearMainThreadActions();
             RemoteExecutionPlayerApi.SetState(this, generation,
                 RemoteExecutionConnectionState.Disconnected, null);
@@ -137,6 +157,8 @@ namespace RemoteExecution
             m_CommandHost?.CancelConnection(previousGeneration);
             m_CommandHost?.Dispose();
             m_CommandHost = null;
+            DisposeTransport(m_Configuration?.Transport);
+            m_Configuration = null;
             RemoteExecutionPlayerApi.DriverDestroyed(this);
         }
 
@@ -157,6 +179,13 @@ namespace RemoteExecution
             RemoteExecutionPlayerConnection connection = m_Connection;
             m_Connection = null;
             connection?.Stop();
+        }
+
+        private static void DisposeTransport(IRemoteExecutionTransport transport)
+        {
+            if (transport == null) return;
+            try { transport.Dispose(); }
+            catch (Exception) { }
         }
 
         private struct QueuedAction

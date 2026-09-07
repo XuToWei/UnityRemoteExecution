@@ -91,7 +91,7 @@ namespace RemoteExecution.HybridCLR
                 {
                     return RemoteCommandResult.Failure(
                         "ENTRY_EXECUTION_FAILED",
-                        exception.Message + " The assemblies remain loaded in the Player.");
+                        $"{exception.Message} The assemblies remain loaded in the Player.");
                 }
             }
             finally { s_ApplyLock.Release(); }
@@ -197,7 +197,7 @@ namespace RemoteExecution.HybridCLR
                     s_Poisoned = true;
                     failure = RemoteCommandResult.Failure(
                         "PARTIAL_APPLY_RESTART_REQUIRED",
-                        exception.Message + " Restart the Player before applying another bundle.");
+                        $"{exception.Message} Restart the Player before applying another bundle.");
                 }
                 else
                 {

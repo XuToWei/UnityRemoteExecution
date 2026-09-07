@@ -28,7 +28,7 @@ namespace RemoteExecution
 
     public sealed class RemoteExecutionPlayerOptions
     {
-        public RemoteExecutionPlayerOptions(IRemoteExecutionConnector connector = null,
+        public RemoteExecutionPlayerOptions(IRemoteExecutionTransport transport = null,
             string clientId = null,
             int maxCommandRequestBytes =
                 RemoteExecutionProtocol.DefaultMaxCommandRequestBytes,
@@ -37,7 +37,7 @@ namespace RemoteExecution
             TimeSpan? connectTimeout = null,
             TimeSpan? handshakeTimeout = null)
         {
-            Connector = connector;
+            Transport = transport;
             ClientId = clientId;
             MaxCommandRequestBytes = maxCommandRequestBytes;
             MaxCommandResponseBytes = maxCommandResponseBytes;
@@ -45,7 +45,7 @@ namespace RemoteExecution
             HandshakeTimeout = handshakeTimeout ?? TimeSpan.FromSeconds(15);
         }
 
-        public IRemoteExecutionConnector Connector { get; }
+        public IRemoteExecutionTransport Transport { get; }
         public string ClientId { get; }
         public int MaxCommandRequestBytes { get; }
         public int MaxCommandResponseBytes { get; }
@@ -69,7 +69,8 @@ namespace RemoteExecution
             get { lock (s_Lock) return s_ConnectionState; }
         }
 
-        public static bool IsConnected => ConnectionState == RemoteExecutionConnectionState.Connected;
+        public static bool IsConnected =>
+            ConnectionState == RemoteExecutionConnectionState.Connected;
 
         public static RemoteExecutionConnectionError LastError
         {
@@ -88,7 +89,7 @@ namespace RemoteExecution
             int maxCommandResponseBytes = RemoteExecutionProtocol.DefaultMaxCommandResponseBytes)
         {
             Start(new RemoteExecutionPlayerOptions(
-                new RemoteExecutionTcpConnector(editorHost, editorPort), clientId,
+                RemoteExecutionTcpTransport.CreateClient(editorHost, editorPort), clientId,
                 maxCommandRequestBytes, maxCommandResponseBytes));
         }
 
@@ -181,15 +182,6 @@ namespace RemoteExecution
         private static RemoteExecutionPlayerConfiguration CreateConfiguration(
             RemoteExecutionPlayerOptions options)
         {
-            IRemoteExecutionConnector connector = options.Connector ??
-                new RemoteExecutionTcpConnector();
-            string connectionKey = (connector.ConnectionKey ?? string.Empty).Trim();
-            if (connectionKey.Length == 0)
-                throw new ArgumentException("Connector connection key is required.",
-                    nameof(options));
-            if (GetUtf8ByteCount(connectionKey) > RemoteExecutionProtocol.MaxStringBytes)
-                throw new ArgumentException("Connector connection key is too long.",
-                    nameof(options));
             if (options.MaxCommandRequestBytes < 0 ||
                 options.MaxCommandRequestBytes > RemoteExecutionProtocol.MaxCommandRequestBytes)
                 throw new ArgumentOutOfRangeException(nameof(options.MaxCommandRequestBytes));
@@ -207,7 +199,13 @@ namespace RemoteExecution
                     $"Client ID must contain 1..{RemoteExecutionProtocol.MaxStringBytes} UTF-8 bytes.",
                     nameof(options.ClientId));
 
-            return new RemoteExecutionPlayerConfiguration(connector, connectionKey,
+            IRemoteExecutionTransport transport = options.Transport ??
+                RemoteExecutionTcpTransport.CreateClient();
+            string configurationKey = transport.ConfigurationKey;
+            if (string.IsNullOrWhiteSpace(configurationKey))
+                throw new ArgumentException("Transport configuration key is required.",
+                    nameof(options));
+            return new RemoteExecutionPlayerConfiguration(transport, configurationKey,
                 resolvedClientId, options.MaxCommandRequestBytes,
                 options.MaxCommandResponseBytes, options.ConnectTimeout,
                 options.HandshakeTimeout, Application.unityVersion, GetRuntimeTarget());
@@ -283,13 +281,13 @@ namespace RemoteExecution
     internal sealed class RemoteExecutionPlayerConfiguration :
         IEquatable<RemoteExecutionPlayerConfiguration>
     {
-        internal RemoteExecutionPlayerConfiguration(IRemoteExecutionConnector connector,
-            string connectionKey, string clientId, int maxCommandRequestBytes,
+        internal RemoteExecutionPlayerConfiguration(IRemoteExecutionTransport transport,
+            string configurationKey, string clientId, int maxCommandRequestBytes,
             int maxCommandResponseBytes, TimeSpan connectTimeout,
             TimeSpan handshakeTimeout, string unityVersion, string target)
         {
-            Connector = connector;
-            ConnectionKey = connectionKey;
+            Transport = transport;
+            ConfigurationKey = configurationKey;
             ClientId = clientId;
             MaxCommandRequestBytes = maxCommandRequestBytes;
             MaxCommandResponseBytes = maxCommandResponseBytes;
@@ -299,8 +297,8 @@ namespace RemoteExecution
             Target = target;
         }
 
-        internal IRemoteExecutionConnector Connector { get; }
-        internal string ConnectionKey { get; }
+        internal IRemoteExecutionTransport Transport { get; }
+        internal string ConfigurationKey { get; }
         internal string ClientId { get; }
         internal int MaxCommandRequestBytes { get; }
         internal int MaxCommandResponseBytes { get; }
@@ -312,7 +310,7 @@ namespace RemoteExecution
         public bool Equals(RemoteExecutionPlayerConfiguration other)
         {
             return other != null &&
-                string.Equals(ConnectionKey, other.ConnectionKey, StringComparison.Ordinal) &&
+                string.Equals(ConfigurationKey, other.ConfigurationKey, StringComparison.Ordinal) &&
                 string.Equals(ClientId, other.ClientId, StringComparison.Ordinal) &&
                 MaxCommandRequestBytes == other.MaxCommandRequestBytes &&
                 MaxCommandResponseBytes == other.MaxCommandResponseBytes &&
@@ -329,7 +327,7 @@ namespace RemoteExecution
         {
             unchecked
             {
-                int hash = StringComparer.Ordinal.GetHashCode(ConnectionKey);
+                int hash = StringComparer.Ordinal.GetHashCode(ConfigurationKey);
                 hash = (hash * 397) ^ StringComparer.Ordinal.GetHashCode(ClientId);
                 hash = (hash * 397) ^ MaxCommandRequestBytes;
                 hash = (hash * 397) ^ MaxCommandResponseBytes;

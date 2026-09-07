@@ -27,7 +27,8 @@ namespace RemoteExecution
         {
             m_Driver = driver ?? throw new ArgumentNullException(nameof(driver));
             m_Generation = generation;
-            m_Configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+            m_Configuration = configuration ??
+                throw new ArgumentNullException(nameof(configuration));
         }
 
         internal void Start()
@@ -67,7 +68,7 @@ namespace RemoteExecution
                     .ConfigureAwait(false);
                 if (m_Channel == null)
                     throw new RemoteExecutionConnectionException("CONNECT_FAILED",
-                        "The transport connector returned no channel.");
+                        "The transport returned no channel.");
                 if (IsStopRequested()) return;
                 m_Driver.PostHandshaking(m_Generation);
 
@@ -187,11 +188,11 @@ namespace RemoteExecution
                 Task<IRemoteExecutionChannel> connect;
                 try
                 {
-                    connect = m_Configuration.Connector.ConnectAsync(
+                    connect = m_Configuration.Transport.ConnectAsync(
                         connectCancellation.Token);
                     if (connect == null)
                         throw new InvalidOperationException(
-                            "The transport connector returned no connect task.");
+                            "The transport returned no connect task.");
                 }
                 catch (Exception exception)
                 {
@@ -209,7 +210,7 @@ namespace RemoteExecution
                     ObserveLateChannel(connect);
                     cancellationToken.ThrowIfCancellationRequested();
                     throw new RemoteExecutionConnectionException("CONNECT_TIMEOUT",
-                        $"Timed out connecting through '{m_Configuration.ConnectionKey}'.");
+                        $"Timed out connecting through '{m_Configuration.ConfigurationKey}'.");
                 }
                 try { return await connect.ConfigureAwait(false); }
                 catch (OperationCanceledException) when (
