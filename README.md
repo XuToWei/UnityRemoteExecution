@@ -16,7 +16,7 @@ https://github.com/XuToWei/UnityRemoteExecution.git
 
 ## Player startup
 
-The package does not add anything to a scene and does not connect automatically. Start and stop the Player client from your own bootstrap or development UI:
+The package does not add anything to a scene automatically and does not connect automatically. Start and stop the Player client from your own bootstrap or development UI:
 
 ```csharp
 using RemoteExecution;
@@ -61,6 +61,49 @@ public sealed class RemoteExecutionControls : MonoBehaviour
 `Start` validates the transport, client ID, timeouts, and optional transfer limits synchronously. The host/port overload and a missing custom transport use the bundled TCP transport. Calling it again with the same parameters while active does nothing; calling it after a fault retries, and calling it with different parameters replaces the current connection. There is no automatic reconnect, so the business layer controls retry timing and UI. `Stop` is safe to call repeatedly.
 
 The Player API is unavailable in Editor Play Mode. Start the Editor listener from **Window > Remote Execution**, then call `RemoteExecutionPlayerApi.Start` from a built Player. No `RemoteExecutionComponent` or settings asset is required.
+
+
+### Optional runtime connection UI
+
+For a ready-to-use development panel, create `RemoteExecutionPlayerConnectionUI` in your own runtime code and call its `OnGUI()` from your own `MonoBehaviour.OnGUI()`. It is an optional plain C# helper: it does not create a GameObject, subscribe to lifecycle callbacks, connect by itself, or replace the static API or your own connection UI.
+
+```csharp
+using RemoteExecution;
+using UnityEngine;
+
+public sealed class RemoteExecutionControls : MonoBehaviour
+{
+    private readonly RemoteExecutionPlayerConnectionUI m_ConnectionUI =
+        new RemoteExecutionPlayerConnectionUI();
+
+    private void OnGUI()
+    {
+        m_ConnectionUI.OnGUI();
+    }
+}
+```
+
+The helper exposes TCP host, port, client ID, `ShowUI`, and `Area` properties. Its Connect/Retry and Stop/Disconnect buttons call `RemoteExecutionPlayerApi.Start` and `Stop`, and it displays the current state and fault details. The caller controls when the helper is created, shown, enabled, and destroyed; it never stops the global connection implicitly.
+
+Custom transports remain available. Assign an `IRemoteExecutionPlayerOptionsProvider` to `OptionsProvider`, or call `Connect(RemoteExecutionPlayerOptions)` from your own code:
+
+```csharp
+public sealed class CustomPlayerOptions : IRemoteExecutionPlayerOptionsProvider
+{
+    public RemoteExecutionPlayerOptions CreateOptions()
+    {
+        return new RemoteExecutionPlayerOptions(
+            GameWebSocketTransport.CreateClient("wss://dev.example/remote"),
+            "Test Device");
+    }
+}
+
+// Configure once, then let the caller invoke m_ConnectionUI.OnGUI().
+m_ConnectionUI.OptionsProvider = new CustomPlayerOptions();
+```
+
+A provider must return a new options object and a new transport instance for every connection attempt. The Player API owns and disposes the transport; the helper must not dispose it. Assigning a provider preserves custom connection behavior instead of silently replacing it with TCP. Use the static API directly when the application needs complete control over connection timing or UI.
+
 
 The package does not restrict which Player build types may connect. The Editor bind address defaults to `127.0.0.1`, and `Start` commonly uses the same host for local connections. For LAN use, bind the Editor to a reachable local interface (or `0.0.0.0`), pass the Editor machine's actual LAN address to the Player, and allow the port through the firewall. `0.0.0.0` is a bind address, not a valid Player destination.
 

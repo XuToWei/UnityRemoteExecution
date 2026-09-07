@@ -16,7 +16,7 @@ https://github.com/XuToWei/UnityRemoteExecution.git
 
 ## Player 启动
 
-包不会向场景添加组件，也不会自动连接。由业务层在自己的启动流程或开发 UI 中启动和停止 Player 客户端：
+包不会自动向场景添加组件，也不会自动连接。由业务层在自己的启动流程或开发 UI 中启动和停止 Player 客户端：
 
 ```csharp
 using RemoteExecution;
@@ -61,6 +61,49 @@ public sealed class RemoteExecutionControls : MonoBehaviour
 `Start` 会同步校验 transport、客户端 ID、超时和可选传输限制。使用 host/port overload 或未提供自定义 transport 时，包会使用默认 TCP。连接期间使用相同参数重复调用不会产生新连接；故障后再次调用会重试，传入不同参数则替换当前连接。包不会自动重连，重试时机和 UI 完全由业务层控制。`Stop` 可以安全地重复调用。
 
 Player API 不支持 Editor Play Mode。先在 **Window > Remote Execution** 中启动 Editor 监听服务，再由构建后的 Player 调用 `RemoteExecutionPlayerApi.Start`。不需要添加 `RemoteExecutionComponent` 或创建配置资产。
+
+
+### 可选运行时连接 UI
+
+如果需要开箱即用的开发面板，可以在自己的运行时代码中创建 `RemoteExecutionPlayerConnectionUI`，并从自己的 `MonoBehaviour.OnGUI()` 调用它的 `OnGUI()`。它是一个可选的普通 C# helper：不会创建 GameObject，不会自行订阅生命周期，不会自动连接，也不会替换静态 API 或业务自己的连接 UI。
+
+```csharp
+using RemoteExecution;
+using UnityEngine;
+
+public sealed class RemoteExecutionControls : MonoBehaviour
+{
+    private readonly RemoteExecutionPlayerConnectionUI m_ConnectionUI =
+        new RemoteExecutionPlayerConnectionUI();
+
+    private void OnGUI()
+    {
+        m_ConnectionUI.OnGUI();
+    }
+}
+```
+
+helper 提供 TCP host、port、client ID、`ShowUI` 和 `Area` 属性。Connect/Retry、Stop/Disconnect 按钮会调用 `RemoteExecutionPlayerApi.Start` 和 `Stop`，并显示当前状态和故障信息。helper 的创建、显示、启用和销毁都由调用方控制；它不会隐式停止全局连接。
+
+自定义传输仍然可用。可以给 `OptionsProvider` 赋值 `IRemoteExecutionPlayerOptionsProvider`，也可以由代码直接调用 `Connect(RemoteExecutionPlayerOptions)`：
+
+```csharp
+public sealed class CustomPlayerOptions : IRemoteExecutionPlayerOptionsProvider
+{
+    public RemoteExecutionPlayerOptions CreateOptions()
+    {
+        return new RemoteExecutionPlayerOptions(
+            GameWebSocketTransport.CreateClient("wss://dev.example/remote"),
+            "Test Device");
+    }
+}
+
+// 配置一次，然后由调用方继续调用 m_ConnectionUI.OnGUI()。
+m_ConnectionUI.OptionsProvider = new CustomPlayerOptions();
+```
+
+provider 每次连接尝试都必须返回新的 options 对象和新的 transport 实例。Transport 的所有权和释放仍由 Player API 管理，helper 不应自行释放它。指定 provider 可以保留自定义连接行为，不会被静默替换为 TCP。如果业务需要完全控制连接时机或 UI，仍可直接使用静态 API。
+
 
 包本身不限制可连接的 Player 构建类型。Editor 监听地址默认使用 `127.0.0.1`，本机连接时 `Start` 通常也传入该地址。局域网使用时，应让 Editor 监听可达的本机接口（也可监听 `0.0.0.0`），向 Player 传入 Editor 机器的实际局域网地址，并按需放行防火墙端口。`0.0.0.0` 只能用于监听，不能作为 Player 的目标地址。
 
