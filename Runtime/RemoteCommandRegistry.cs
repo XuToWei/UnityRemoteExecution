@@ -78,6 +78,7 @@ namespace RemoteExecution
 
         internal bool TryGet(Type type, out RemoteCommandDescriptor descriptor)
         {
+            descriptor = null;
             return type != null && m_ByType.TryGetValue(type.FullName, out descriptor);
         }
 
