@@ -74,30 +74,24 @@ namespace RemoteExecution
     {
         internal RemoteCommandSnapshot(RemoteCommandInfo command)
         {
-            Id = command.Id;
+            TypeName = command.TypeName;
             Name = command.Name;
             Description = command.Description;
             Category = command.Category;
             TimeoutSeconds = command.TimeoutSeconds;
-            MaxRequestBytes = command.MaxRequestBytes;
-            MaxResponseBytes = command.MaxResponseBytes;
             RequestContentType = command.RequestContentType;
             ResponseContentType = command.ResponseContentType;
             Executable = command.Executable;
-            RequiresMainThread = command.RequiresMainThread;
         }
 
-        public string Id { get; }
+        public string TypeName { get; }
         public string Name { get; }
         public string Description { get; }
         public string Category { get; }
         public int TimeoutSeconds { get; }
-        public int MaxRequestBytes { get; }
-        public int MaxResponseBytes { get; }
         public string RequestContentType { get; }
         public string ResponseContentType { get; }
         public bool Executable { get; }
-        public bool RequiresMainThread { get; }
     }
 
     public sealed class RemoteExecutionClientInfo
@@ -155,6 +149,10 @@ namespace RemoteExecution
 
     public static class RemoteExecutionEditorApi
     {
+        private static readonly object s_SelectionLock = new object();
+        private static int s_SelectedSessionId;
+        private static int s_SelectionOwnerId;
+
         public static bool IsServerRunning => RemoteExecutionServer.IsRunning;
         public static string TransportKind => RemoteExecutionServer.TransportKind;
         public static string TransportDescription =>
@@ -188,6 +186,60 @@ namespace RemoteExecution
         public static IReadOnlyList<RemoteExecutionClientInfo> GetClients()
         {
             return RemoteExecutionServer.GetClients();
+        }
+
+        internal static void SetSelectedSession(int ownerId, int sessionId)
+        {
+            lock (s_SelectionLock)
+            {
+                s_SelectionOwnerId = ownerId;
+                s_SelectedSessionId = sessionId;
+            }
+        }
+
+        internal static void ClearSelectedSession(int ownerId)
+        {
+            lock (s_SelectionLock)
+            {
+                if (s_SelectionOwnerId != ownerId) return;
+                s_SelectionOwnerId = 0;
+                s_SelectedSessionId = 0;
+            }
+        }
+
+        public static Task<RemoteExecutionResult> ExecuteCommandAsync(
+            string commandId)
+        {
+            int sessionId;
+            lock (s_SelectionLock) sessionId = s_SelectedSessionId;
+            if (sessionId == 0)
+                throw new InvalidOperationException(
+                    "No Player is selected in the Remote Execution window.");
+            return ExecuteCommandAsync(sessionId, commandId);
+        }
+
+        public static Task<RemoteExecutionResult> ExecuteCommandAsync<TCommand>(
+            byte[] payload = null, CancellationToken cancellationToken = default)
+            where TCommand : class, IRemoteCommand
+        {
+            int sessionId;
+            lock (s_SelectionLock) sessionId = s_SelectedSessionId;
+            if (sessionId == 0)
+                throw new InvalidOperationException(
+                    "No Player is selected in the Remote Execution window.");
+            return ExecuteCommandAsync<TCommand>(sessionId, payload, cancellationToken);
+        }
+
+        public static Task<RemoteExecutionResult> ExecuteCommandAsync<TCommand>(
+            int sessionId, byte[] payload = null,
+            CancellationToken cancellationToken = default)
+            where TCommand : class, IRemoteCommand
+        {
+            string typeName = RemoteExecutionEditorCommandCatalog.GetTypeName<TCommand>();
+            string contentType = RemoteExecutionEditorCommandCatalog
+                .GetRequestContentType<TCommand>();
+            return ExecuteCommandAsync(sessionId, typeName, payload,
+                contentType, cancellationToken);
         }
 
         public static Task<RemoteExecutionResult> ExecuteCommandAsync(

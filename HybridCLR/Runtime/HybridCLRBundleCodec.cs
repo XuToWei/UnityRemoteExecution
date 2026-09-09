@@ -37,7 +37,7 @@ namespace RemoteExecution.HybridCLR
 
     public static class HybridCLRBundleCodec
     {
-        public const string ApplyCommandId = "hybridclr.apply-bundle";
+        public const string TypeName = "RemoteExecution.HybridCLR.HybridCLRRemoteExecutionCommand";
         public const string ContentType = "application/vnd.remote-execution.hybridclr-bundle";
         public const int MaxEnvelopeBytes = RemoteExecutionProtocol.MaxCommandRequestBytes;
         public const int MaxAssemblyCount = 256;

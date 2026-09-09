@@ -11,7 +11,7 @@ using UnityEngine.Scripting;
 namespace RemoteExecution.HybridCLR
 {
     [Preserve]
-    public sealed class HybridCLRRemoteExecutionCommandProvider : IRemoteCommandProvider
+    public sealed class HybridCLRRemoteExecutionCommand : IRemoteCommand
     {
         private static readonly SemaphoreSlim s_ApplyLock = new SemaphoreSlim(1, 1);
         private static readonly Dictionary<string, byte[]> s_AppliedHashes =
@@ -22,30 +22,21 @@ namespace RemoteExecution.HybridCLR
             new Dictionary<Guid, byte[]>();
         private static bool s_Poisoned;
 
-        public HybridCLRRemoteExecutionCommandProvider()
-        {
-        }
+        public string Name => "Apply and execute HybridCLR bundle";
+        public string Description => "Validates and loads a HybridCLR assembly bundle, then executes its entry.";
+        public string Category => "HybridCLR";
+        public int TimeoutSeconds => 180;
+        public string RequestContentType => HybridCLRBundleCodec.ContentType;
+        public string ResponseContentType => string.Empty;
 
-        public void RegisterCommands(IRemoteCommandRegistry registry)
+        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommandContext context,
+            CancellationToken cancellationToken)
         {
-            registry.Register(
-                new RemoteCommandDefinition(
-                    HybridCLRBundleCodec.ApplyCommandId,
-                    "Apply and execute HybridCLR bundle",
-                    "Validates and loads a HybridCLR assembly bundle, then executes its entry.",
-                    "HybridCLR",
-                    timeoutSeconds: 180,
-                    maxRequestBytes: HybridCLRBundleCodec.MaxEnvelopeBytes,
-                    maxResponseBytes: 0,
-                    requestContentType: HybridCLRBundleCodec.ContentType,
-                    responseContentType: string.Empty,
-                    requiresMainThread: true),
-                ApplyAsync);
+            return ApplyAsync(context, cancellationToken);
         }
 
         private static async Task<RemoteCommandResult> ApplyAsync(
-            RemoteCommandContext context,
-            CancellationToken cancellationToken)
+            RemoteCommandContext context, CancellationToken cancellationToken)
         {
             await s_ApplyLock.WaitAsync(cancellationToken);
             try
@@ -111,8 +102,7 @@ namespace RemoteExecution.HybridCLR
             byte[] bundleSignature = ComputeBundleSignature(bundle);
             if (s_AppliedBundleContents.TryGetValue(bundle.BundleId,
                     out byte[] appliedBundleSignature) &&
-                !RemoteExecutionProtocol.FixedTimeEquals(appliedBundleSignature,
-                    bundleSignature))
+                !RemoteExecutionProtocol.FixedTimeEquals(appliedBundleSignature, bundleSignature))
             {
                 failure = RemoteCommandResult.Failure(
                     "BUNDLE_ID_CONFLICT",
@@ -297,7 +287,6 @@ namespace RemoteExecution.HybridCLR
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         private static void Initialize()
         {
-            // Loading this type makes the optional adapter visible to provider discovery.
         }
     }
 }

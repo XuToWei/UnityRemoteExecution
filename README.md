@@ -139,49 +139,41 @@ For WebSocket, map one complete URX3 frame to one binary message: use `RemoteExe
 
 ## Runtime extension API
 
-Register each named binary handler explicitly before starting the Player connection:
+Register each named binary command as a concrete `IRemoteCommand` type. The type owns its definition and handler:
 
 ```csharp
 using System.Threading;
 using System.Threading.Tasks;
 using RemoteExecution;
 
-public static class TableRemoteCommands
+public sealed class TableReloadCommand : IRemoteCommand
 {
-    public static void Register()
+    public string Name => "Reload tables";
+    public string Description => "Replace the runtime table data and reload it.";
+    public string Category => "Tables";
+    public int TimeoutSeconds => 60;
+    public string RequestContentType => "application/octet-stream";
+    public string ResponseContentType => "application/octet-stream";
+
+    public async Task<RemoteCommandResult> ExecuteAsync(
+        RemoteCommandContext context, CancellationToken cancellationToken)
     {
-        RemoteCommandRegistry.Register(
-            new RemoteCommandDefinition(
-                "table.reload",
-                "Reload tables",
-                "Replace the runtime table data and reload it.",
-                "Tables",
-                timeoutSeconds: 60,
-                maxRequestBytes: 64 * 1024 * 1024,
-                maxResponseBytes: 1024,
-                requestContentType: "application/octet-stream",
-                responseContentType: "application/octet-stream"),
-            async (context, cancellationToken) =>
-            {
-                byte[] request = context.Payload;
-                byte[] response = await ReloadTablesAsync(request, cancellationToken);
-                return RemoteCommandResult.Success(
-                    "Tables reloaded.", response, "application/octet-stream");
-            });
+        byte[] response = await ReloadTablesAsync(context.Payload, cancellationToken);
+        return RemoteCommandResult.Success(
+            "Tables reloaded.", response, "application/octet-stream");
     }
 
     private static Task<byte[]> ReloadTablesAsync(
         byte[] data, CancellationToken cancellationToken)
     {
-        // Validate the bytes and atomically replace the runtime table data.
         return Task.FromResult(new byte[0]);
     }
 }
 ```
 
-Call `TableRemoteCommands.Register()` once before `RemoteExecutionPlayerApi.Start(...)`. Command IDs must be globally unique; duplicate registration throws. Static methods are not exposed automatically, and the package has no command attribute.
+Concrete commands have a public parameterless constructor and are discovered when the Player starts. The Editor discovers the same command types with `TypeCache` when `StartServer` runs; this creates metadata mappings for typed Editor calls and does not execute the handler. The protocol command type is the command class's `FullName`; the type must be present in both Editor and Player-compatible assemblies. Global request/response limits are defined by the protocol and Player connection configuration, not by individual commands. Reflection-discovered command types must be preserved in IL2CPP builds with `[Preserve]` or `Assets/link.xml`.
 
-Reusable modules may still implement `IRemoteCommandProvider`; the Player discovers concrete provider types when it first starts. Because provider discovery uses reflection, IL2CPP projects should preserve providers and their public parameterless constructors with `[Preserve]` or `Assets/link.xml`.
+Use `RemoteExecutionEditorApi.ExecuteCommandAsync<TableReloadCommand>(payload)` to invoke the command. The string-ID API remains available for dynamic commands.
 
 ## Editor API
 
@@ -200,6 +192,16 @@ RemoteExecutionResult result = await RemoteExecutionEditorApi.ExecuteCommandAsyn
 if (!result.Succeeded)
     UnityEngine.Debug.LogError($"[{result.Code}] {result.Message}");
 ```
+
+For an input-free command, Editor code can target the Player currently selected on the window's **Commands** tab and await its result directly:
+
+```csharp
+RemoteExecutionResult result = await RemoteExecutionEditorApi.ExecuteCommandAsync(
+    "game.refresh");
+byte[] response = result.Payload;
+```
+
+This overload sends an empty payload with an empty content type. The Remote Execution window must remain open with a Player selected. Use the `sessionId` overload when the command needs input or the caller must choose the Player explicitly.
 
 Call `RefreshCommandsAsync(sessionId)` to await a fresh command catalog. `GetClients()` returns read-only snapshots containing the Player target, explicit `IsReady` state, and current command metadata. `ClientId` is self-reported display metadata and is not a security identity. The command catalog remains a capability-negotiation API for Editor panels; the core window does not provide a generic command executor.
 
@@ -301,10 +303,10 @@ Without HybridCLR, the adapter command and HybridCLR panel are absent. The Comma
 - Maximum transfer chunk: 60 KiB.
 - Hard command request limit: 128 MiB; default business-command request limit: 16 MiB.
 - Hard/default command response limits: 64 MiB / 16 MiB.
-- Global settings and per-command metadata can lower these limits; the effective minimum is advertised in the catalog.
+- Global request/response limits are protocol-wide and may be lowered by the Player connection configuration; commands no longer declare individual size limits.
 - Binary input and output include total length and SHA-256, and chunks must be complete and ordered.
-- One command executes at a time per Player.
-- `requiresMainThread: true` starts the handler on Unity's main thread; code after an asynchronous continuation is the handler's responsibility.
+- Each Player executes at most one command at a time.
+- Every handler starts on Unity's main thread. Code after an `await` is responsible for its own thread affinity; synchronous CPU-heavy handlers block the Unity frame.
 - Timeouts and cancellation are cooperative; a handler that ignores cancellation cannot be safely interrupted.
 - The core protocol does not authenticate `ClientId`; bundled TCP is unauthenticated and unencrypted, while a custom transport owns any TLS/authentication policy.
 - SHA-256 checks detect accidental transfer corruption, but do not authenticate the peer or protect against active tampering.
@@ -312,6 +314,6 @@ Without HybridCLR, the adapter command and HybridCLR panel are absent. The Comma
 
 ## Protocol
 
-Protocol version 3 uses the `URX3` frame magic and an unauthenticated `Hello(requestId) → Ready(same requestId)` handshake. `Ready` must have an empty payload. Message numbers are explicit: `Hello=1`, `Ready=2`, `Error=3`, `Ping=4`, `Pong=5`, `ListCommands=6`, `Commands=7`, command-input begin/chunk/end `=8..10`, command-result metadata/chunk/end `=11..13`, and `CancelCommand=14`.
+Protocol version 3 uses the `URX3` frame magic and an unauthenticated `Hello(requestId) → Ready(same requestId)` handshake; `Ready` must have an empty payload. Command catalog entries use the concrete command type's `FullName`; request/response size limits are global rather than per command. Message numbers remain explicit: `Hello=1`, `Ready=2`, `Error=3`, `Ping=4`, `Pong=5`, `ListCommands=6`, `Commands=7`, command input begin/chunk/end `=8..10`, command result metadata/chunk/end `=11..13`, and `CancelCommand=14`.
 
-Version 3 contains command-catalog discovery, generic command request/result transfer, cancellation, errors, and ping/pong. It has no v2 authentication fallback; v2 and v3 Editor/Player builds are not wire-compatible. The HybridCLR `HCB1` envelope version 2 is independent from the core protocol.
+Version 3 contains command-catalog discovery, generic command request/result transfer, cancellation, errors, and ping/pong. The HybridCLR `HCB1` envelope version 2 is independent from the core protocol.

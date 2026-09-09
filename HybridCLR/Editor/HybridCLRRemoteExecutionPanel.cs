@@ -71,16 +71,14 @@ public sealed class RemoteExecutionEntry : IHybridCLRRemoteExecutionEntry
             if (player == null) return "Select a connected Player.";
             if (!player.IsReady) return "The selected Player is not ready.";
             RemoteCommandSnapshot applyCommand = player.Commands.FirstOrDefault(command =>
-                string.Equals(command.Id, HybridCLRBundleCodec.ApplyCommandId,
+                string.Equals(command.TypeName, HybridCLRBundleCodec.TypeName,
                     StringComparison.Ordinal));
             if (applyCommand == null)
-                return "Refresh the command catalog or use a Player containing the HybridCLR adapter.";
-            if (!applyCommand.Executable) return "The Player HybridCLR adapter is unavailable.";
+                return "Refresh the command catalog or use a Player containing the HybridCLR command.";
+            if (!applyCommand.Executable) return "The Player HybridCLR command is unavailable.";
             if (!string.Equals(applyCommand.RequestContentType,
                 HybridCLRBundleCodec.ContentType, StringComparison.OrdinalIgnoreCase))
-                return "The Player HybridCLR adapter uses an incompatible content type.";
-            if (applyCommand.MaxRequestBytes <= 0)
-                return "The Player does not allow HybridCLR bundle input.";
+                return "The Player HybridCLR command uses an incompatible content type.";
             return null;
         }
 
@@ -99,7 +97,7 @@ public sealed class RemoteExecutionEntry : IHybridCLRRemoteExecutionEntry
             await RemoteExecutionEditorApi.RefreshCommandsAsync(sessionId, cancellationToken);
             RemoteExecutionClientInfo client = FindReadyClient(sessionId);
             RemoteCommandSnapshot applyCommand = client.Commands.FirstOrDefault(command =>
-                string.Equals(command.Id, HybridCLRBundleCodec.ApplyCommandId,
+                string.Equals(command.TypeName, HybridCLRBundleCodec.TypeName,
                     StringComparison.Ordinal));
             ValidateApplyCommand(applyCommand);
 
@@ -115,12 +113,12 @@ public sealed class RemoteExecutionEntry : IHybridCLRRemoteExecutionEntry
             cancellationToken.ThrowIfCancellationRequested();
             byte[] envelope = HybridCLRBundleCodec.Encode(new HybridCLRBundle(
                 Guid.NewGuid(), output.Target, output.Artifacts));
-            if (envelope.Length > applyCommand.MaxRequestBytes)
+            if (envelope.Length > RemoteExecutionProtocol.MaxCommandRequestBytes)
                 throw new InvalidOperationException(
-                    $"HybridCLR bundle exceeds the Player limit of {applyCommand.MaxRequestBytes} bytes.");
-            RemoteExecutionResult result = await RemoteExecutionEditorApi.ExecuteCommandAsync(
-                sessionId, HybridCLRBundleCodec.ApplyCommandId, envelope,
-                HybridCLRBundleCodec.ContentType, cancellationToken);
+                    $"HybridCLR bundle exceeds the global Player limit of {RemoteExecutionProtocol.MaxCommandRequestBytes} bytes.");
+            RemoteExecutionResult result = await RemoteExecutionEditorApi.ExecuteCommandAsync<
+                HybridCLRRemoteExecutionCommand>(
+                sessionId, envelope, cancellationToken);
             if (!result.Succeeded)
                 throw new InvalidOperationException(
                     $"Player apply or execution failed [{result.Code}]: {result.Message}");
@@ -139,16 +137,13 @@ public sealed class RemoteExecutionEntry : IHybridCLRRemoteExecutionEntry
         {
             if (command == null)
                 throw new InvalidOperationException(
-                    "The selected Player does not expose the HybridCLR adapter command.");
+                    "The selected Player does not expose the HybridCLR command.");
             if (!command.Executable)
-                throw new InvalidOperationException("The HybridCLR adapter command is unavailable.");
+                throw new InvalidOperationException("The HybridCLR command is unavailable.");
             if (!string.Equals(command.RequestContentType, HybridCLRBundleCodec.ContentType,
                 StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException(
-                    "The Player HybridCLR adapter uses an incompatible content type.");
-            if (command.MaxRequestBytes <= 0)
-                throw new InvalidOperationException(
-                    "The Player does not allow HybridCLR bundle input.");
+                    "The HybridCLR command uses an incompatible content type.");
         }
     }
 }

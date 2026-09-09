@@ -44,6 +44,7 @@ namespace RemoteExecution
         {
             m_Enabled = false;
             m_ContextGeneration++;
+            RemoteExecutionEditorApi.ClearSelectedSession(GetInstanceID());
             EditorApplication.update -= OnEditorUpdate;
             CancelAndDetachOperations();
             DisposePanels();
@@ -274,6 +275,7 @@ namespace RemoteExecution
             if (clients.Count == 0)
             {
                 m_SelectedSessionId = 0;
+                RemoteExecutionEditorApi.SetSelectedSession(GetInstanceID(), 0);
                 EditorGUILayout.HelpBox("No Players are connected.", MessageType.None);
                 return null;
             }
@@ -295,6 +297,7 @@ namespace RemoteExecution
             current = EditorGUILayout.Popup(current, labels);
             RemoteExecutionClientInfo selected = clients[Math.Max(0, current)];
             m_SelectedSessionId = selected.Id;
+            RemoteExecutionEditorApi.SetSelectedSession(GetInstanceID(), selected.Id);
             return selected;
         }
 

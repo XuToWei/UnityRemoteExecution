@@ -139,49 +139,41 @@ WebSocket 推荐将一个完整 URX3 frame 映射为一个 binary message：发�
 
 ## Runtime 扩展接口
 
-在启动 Player 连接前，显式注册每个具名二进制 handler：
+在 Player 连接前，为每个二进制 command 定义一个具体的 `IRemoteCommand` 类型。类型自己持有 definition 和 handler：
 
 ```csharp
 using System.Threading;
 using System.Threading.Tasks;
 using RemoteExecution;
 
-public static class TableRemoteCommands
+public sealed class TableReloadCommand : IRemoteCommand
 {
-    public static void Register()
+    public string Name => "Reload tables";
+    public string Description => "替换运行时表格数据并重载。";
+    public string Category => "Tables";
+    public int TimeoutSeconds => 60;
+    public string RequestContentType => "application/octet-stream";
+    public string ResponseContentType => "application/octet-stream";
+
+    public async Task<RemoteCommandResult> ExecuteAsync(
+        RemoteCommandContext context, CancellationToken cancellationToken)
     {
-        RemoteCommandRegistry.Register(
-            new RemoteCommandDefinition(
-                "table.reload",
-                "Reload tables",
-                "替换运行时表格数据并重载。",
-                "Tables",
-                timeoutSeconds: 60,
-                maxRequestBytes: 64 * 1024 * 1024,
-                maxResponseBytes: 1024,
-                requestContentType: "application/octet-stream",
-                responseContentType: "application/octet-stream"),
-            async (context, cancellationToken) =>
-            {
-                byte[] request = context.Payload;
-                byte[] response = await ReloadTablesAsync(request, cancellationToken);
-                return RemoteCommandResult.Success(
-                    "Tables reloaded.", response, "application/octet-stream");
-            });
+        byte[] response = await ReloadTablesAsync(context.Payload, cancellationToken);
+        return RemoteCommandResult.Success(
+            "Tables reloaded.", response, "application/octet-stream");
     }
 
     private static Task<byte[]> ReloadTablesAsync(
         byte[] data, CancellationToken cancellationToken)
     {
-        // 校验 bytes，并以原子方式替换运行时表格数据。
         return Task.FromResult(new byte[0]);
     }
 }
 ```
 
-在 `RemoteExecutionPlayerApi.Start(...)` 之前调用一次 `TableRemoteCommands.Register()`。命令 ID 必须全局唯一；重复注册会抛出异常。静态方法不会被自动暴露，包也不再提供命令特性。
+具体 command 需要 public 无参构造函数，并在 Player 启动时自动发现。Editor 在 `StartServer` 时用 `TypeCache` 发现同样的 command 类型，仅建立 metadata 映射供 Editor typed API 使用，不会执行 handler。协议中的 command type 使用 command 类的 `FullName`，类型必须同时存在于 Editor 和 Player 兼容的程序集。请求/响应大小由协议和 Player 连接的全局配置决定，不再由单个 command 定义。反射发现的 command 类型在 IL2CPP 构建中需要通过 `[Preserve]` 或 `Assets/link.xml` 保留。
 
-可复用模块仍可实现 `IRemoteCommandProvider`；Player 首次启动时会发现具体 Provider 类型。Provider 发现使用反射，因此 IL2CPP 项目应通过 `[Preserve]` 或 `Assets/link.xml` 保留 Provider 及其 public 无参构造函数。
+使用 `RemoteExecutionEditorApi.ExecuteCommandAsync<TableReloadCommand>(payload)` 调用 command。字符串 ID API 仍可用于动态 command。
 
 ## Editor API
 
@@ -200,6 +192,16 @@ RemoteExecutionResult result = await RemoteExecutionEditorApi.ExecuteCommandAsyn
 if (!result.Succeeded)
     UnityEngine.Debug.LogError($"[{result.Code}] {result.Message}");
 ```
+
+对于无输入 command，Editor 代码可以直接以窗口 **命令** 页签当前选中的 Player 为目标，并等待其返回结果：
+
+```csharp
+RemoteExecutionResult result = await RemoteExecutionEditorApi.ExecuteCommandAsync(
+    "game.refresh");
+byte[] response = result.Payload;
+```
+
+该 overload 会发送空 payload 和空 content type。Remote Execution 窗口需要保持打开并已选中一个 Player。command 需要输入，或调用方需要明确选择 Player 时，应继续使用带 `sessionId` 的 overload。
 
 `RefreshCommandsAsync(sessionId)` 会等待最新目录真正写入缓存后再完成。`GetClients()` 返回包含 Player target、显式 `IsReady` 状态和命令 metadata 的只读快照。`ClientId` 是 Player 自行声明的展示信息，不是安全身份。命令目录继续作为 Editor panel 与 Player 间的能力协商 API；核心窗口不再提供通用命令执行器。
 
@@ -298,10 +300,10 @@ HybridCLR 加载不是核心协议特性。Editor 把自有的版本化 HybridCL
 - 单分片最大 60 KiB。
 - command request 硬上限 128 MiB，普通业务命令默认 16 MiB。
 - command response 硬上限 64 MiB，默认 16 MiB。
-- 全局配置和命令 metadata 可以降低限制；命令目录发布实际有效的最小值。
+- 请求/响应大小是协议级全局限制，可以由 Player 连接配置进一步降低；command 不再声明单独的大小限制。
 - 二进制输入和输出包含总长度与 SHA-256，分片必须完整且严格有序。
-- 每个 Player 同时只执行一个命令。
-- `requiresMainThread: true` 只保证 handler 从 Unity 主线程开始；异步 continuation 之后的线程由 handler 自行负责。
+- 每个 Player 同时只执行一个 command。
+- 每个 handler 都从 Unity 主线程开始；`await` 之后的线程归属由 handler 自己负责，同步的 CPU 密集型 handler 会阻塞 Unity 帧。
 - 超时和取消是协作式的；忽略取消的 handler 不能被安全强行中断。
 - 核心协议不认证 `ClientId`；默认 TCP 没有认证或加密，自定义传输的 TLS/认证由其实现负责。
 - SHA-256 只能检测意外的传输损坏，不能认证对端，也不能抵御主动篡改。
@@ -309,6 +311,6 @@ HybridCLR 加载不是核心协议特性。Editor 把自有的版本化 HybridCL
 
 ## 协议
 
-协议版本 3 使用 `URX3` frame magic，以及无认证的 `Hello(requestId) → Ready(same requestId)` 握手；`Ready` payload 必须为空。消息编号显式固定为：`Hello=1`、`Ready=2`、`Error=3`、`Ping=4`、`Pong=5`、`ListCommands=6`、`Commands=7`、command input begin/chunk/end 为 `8..10`、command result metadata/chunk/end 为 `11..13`、`CancelCommand=14`。
+协议版本 3 使用 `URX3` frame magic，以及无认证的 `Hello(requestId) → Ready(same requestId)` 握手；`Ready` payload 必须为空。命令目录使用具体 command 类型的 `FullName`，请求/响应大小是全局限制而不是单个 command 的限制。消息编号保持显式固定：`Hello=1`、`Ready=2`、`Error=3`、`Ping=4`、`Pong=5`、`ListCommands=6`、`Commands=7`、command input begin/chunk/end 为 `8..10`、command result metadata/chunk/end 为 `11..13`、`CancelCommand=14`。
 
-版本 3 只包含命令目录、通用 command request/result、取消、错误和 ping/pong，不提供 v2 认证回退；v2 与 v3 的 Editor/Player 不兼容。HybridCLR 的 `HCB1` envelope 版本 2 与核心协议相互独立。
+版本 3 包含命令目录发现、通用 command request/result、取消、错误和 ping/pong。HybridCLR 的 `HCB1` envelope 版本 2 与核心协议相互独立。

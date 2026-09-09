@@ -88,6 +88,7 @@ namespace RemoteExecution
             {
                 kind = ValidateTransportKind(transport.Kind);
                 Stop();
+                RemoteExecutionEditorCommandCatalog.Discover();
                 transport.StartListening();
                 description = (transport.Description ?? string.Empty).Trim();
                 if (description.Length == 0)
@@ -140,15 +141,16 @@ namespace RemoteExecution
             }
             foreach (ClientSession session in sessions) session.Dispose();
             cancellation?.Dispose();
+            RemoteExecutionEditorCommandCatalog.Clear();
         }
 
         internal static Task<RemoteExecutionResult> ExecuteCommandAsync(int sessionId,
-            string commandId, byte[] payload, string contentType,
+            string commandType, byte[] payload, string contentType,
             CancellationToken cancellationToken)
         {
             if (!TryGetSession(sessionId, out ClientSession session))
                 throw new InvalidOperationException("Client is no longer connected.");
-            return session.ExecuteCommandAsync(commandId, payload ?? Array.Empty<byte>(),
+            return session.ExecuteCommandAsync(commandType, payload ?? Array.Empty<byte>(),
                 contentType ?? string.Empty, cancellationToken);
         }
 
@@ -232,6 +234,7 @@ namespace RemoteExecution
             DisposeTransport(transport);
             foreach (ClientSession session in sessions) session.Dispose();
             cancellation?.Dispose();
+            RemoteExecutionEditorCommandCatalog.Clear();
         }
 
         private static string ValidateTransportKind(string kind)
@@ -262,6 +265,8 @@ namespace RemoteExecution
 
         private sealed class ClientSession : IDisposable
         {
+            private const int MaxRetainedAssemblyBytes =
+                RemoteExecutionProtocol.DefaultMaxCommandResponseBytes;
             private readonly IRemoteExecutionChannel m_Channel;
             private readonly TimeSpan m_HandshakeTimeout;
             private readonly object m_StateLock = new object();
@@ -273,6 +278,8 @@ namespace RemoteExecution
                 new Dictionary<Guid, PendingOperation>();
             private readonly object m_PendingLock = new object();
             private readonly object m_CatalogStateLock = new object();
+            private readonly object m_ResponseLock = new object();
+            private MemoryStream m_ResponseBuffer = new MemoryStream();
             private bool m_IsReady;
             private bool m_Disposed;
             private string m_Status = "Connecting";
@@ -381,7 +388,7 @@ namespace RemoteExecution
                 }
             }
 
-            internal async Task<RemoteExecutionResult> ExecuteCommandAsync(string commandId,
+            internal async Task<RemoteExecutionResult> ExecuteCommandAsync(string commandType,
                 byte[] payload, string contentType, CancellationToken cancellationToken)
             {
                 using (var linked = CancellationTokenSource.CreateLinkedTokenSource(
@@ -394,14 +401,13 @@ namespace RemoteExecution
                         lock (m_StateLock)
                             if (!m_IsReady)
                                 throw new InvalidOperationException("Client is not ready.");
-                        RemoteCommandInfo command = FindCommand(commandId);
+                        RemoteCommandInfo command = FindCommand(commandType);
                         if (command == null)
                             throw new InvalidOperationException(
-                                $"Remote command was not found: {commandId}");
+                                $"Remote command type was not found: {commandType}");
                         if (!command.Executable)
                             throw new InvalidOperationException("Remote command is unavailable.");
-                        if (payload.Length > command.MaxRequestBytes ||
-                            payload.Length > RemoteExecutionProtocol.MaxCommandRequestBytes)
+                        if (payload.Length > RemoteExecutionProtocol.MaxCommandRequestBytes)
                             throw new InvalidDataException(
                                 "Command payload exceeds the advertised limit.");
                         if (!ContentTypeMatches(command.RequestContentType, contentType))
@@ -409,8 +415,7 @@ namespace RemoteExecution
                                 "Command payload content type does not match the command.");
 
                         Guid requestId = Guid.NewGuid();
-                        var pending = new PendingOperation(command.MaxResponseBytes,
-                            command.ResponseContentType);
+                        var pending = new PendingOperation(command.ResponseContentType);
                         AddPending(requestId, pending);
                         try
                         {
@@ -418,7 +423,7 @@ namespace RemoteExecution
                             linked.Token.ThrowIfCancellationRequested();
                             await SendAsync(
                                 new RemoteFrame(RemoteMessageKind.CommandInputBegin, requestId,
-                                    RemoteExecutionProtocol.EncodeCommandInputBegin(command.Id,
+                                    RemoteExecutionProtocol.EncodeCommandInputBegin(command.TypeName,
                                         contentType, payload.LongLength, hash)),
                                 m_Cancellation.Token).ConfigureAwait(false);
                             for (int offset = 0; offset < payload.Length;
@@ -536,19 +541,19 @@ namespace RemoteExecution
                 lock (m_CatalogStateLock)
                 {
                     m_Commands = (commands ?? Array.Empty<RemoteCommandInfo>())
-                        .OrderBy(command => command.Id, StringComparer.Ordinal)
+                        .OrderBy(command => command.TypeName, StringComparer.Ordinal)
                         .ToArray();
                     m_CommandsUpdatedAt = DateTime.UtcNow;
                 }
                 lock (m_StateLock) m_Status = "Ready";
             }
 
-            private RemoteCommandInfo FindCommand(string commandId)
+            private RemoteCommandInfo FindCommand(string commandType)
             {
                 lock (m_CatalogStateLock)
                 {
                     return m_Commands.FirstOrDefault(command =>
-                        string.Equals(command.Id, commandId, StringComparison.Ordinal));
+                        string.Equals(command.TypeName, commandType, StringComparison.Ordinal));
                 }
             }
 
@@ -564,6 +569,14 @@ namespace RemoteExecution
                         m_Cancellation.Token).Forget();
                     return;
                 }
+                lock (m_ResponseLock)
+                {
+                    HandleResponseLocked(frame);
+                }
+            }
+
+            private void HandleResponseLocked(RemoteFrame frame)
+            {
                 PendingOperation pending = GetPending(frame.RequestId);
                 if (pending == null) return;
                 try
@@ -629,7 +642,7 @@ namespace RemoteExecution
                 RemoteExecutionProtocol.DecodeCommandResult(payload, out bool succeeded,
                     out string code, out string message, out string contentType,
                     out long length, out byte[] hash);
-                if (length > pending.MaxResponseBytes)
+                if (length > RemoteExecutionProtocol.MaxCommandResponseBytes)
                     throw new InvalidDataException("Command result exceeds the advertised limit.");
                 if (!ContentTypeMatches(pending.ExpectedContentType, contentType))
                     throw new InvalidDataException(
@@ -640,7 +653,16 @@ namespace RemoteExecution
                 pending.ResultContentType = contentType;
                 pending.ExpectedLength = length;
                 pending.ExpectedHash = hash;
-                pending.ResultPayload = new MemoryStream(checked((int)length));
+                if (length > 0)
+                {
+                    lock (m_ResponseLock)
+                    {
+                        ResetResponseBuffer();
+                        if (m_ResponseBuffer.Capacity < length)
+                            m_ResponseBuffer.Capacity = checked((int)length);
+                        pending.ResultPayload = m_ResponseBuffer;
+                    }
+                }
                 if (length == 0)
                 {
                     RemovePending(requestId);
@@ -705,12 +727,31 @@ namespace RemoteExecution
             private void RemovePending(Guid requestId)
             {
                 PendingOperation pending = null;
-                lock (m_PendingLock)
+                lock (m_ResponseLock)
                 {
-                    if (m_Pending.TryGetValue(requestId, out pending))
-                        m_Pending.Remove(requestId);
+                    lock (m_PendingLock)
+                    {
+                        if (m_Pending.TryGetValue(requestId, out pending))
+                            m_Pending.Remove(requestId);
+                    }
+                    if (pending != null && ReferenceEquals(pending.ResultPayload, m_ResponseBuffer))
+                        ResetResponseBuffer();
                 }
                 pending?.Dispose();
+            }
+
+            private void ResetResponseBuffer()
+            {
+                if (m_ResponseBuffer.Capacity > MaxRetainedAssemblyBytes)
+                {
+                    m_ResponseBuffer.Dispose();
+                    m_ResponseBuffer = new MemoryStream();
+                }
+                else
+                {
+                    m_ResponseBuffer.SetLength(0);
+                    m_ResponseBuffer.Position = 0;
+                }
             }
 
             private static byte[] ComputeHash(byte[] bytes)
@@ -774,10 +815,14 @@ namespace RemoteExecution
             private void FailPending(Exception exception)
             {
                 PendingOperation[] pending;
-                lock (m_PendingLock)
+                lock (m_ResponseLock)
                 {
-                    pending = m_Pending.Values.ToArray();
-                    m_Pending.Clear();
+                    lock (m_PendingLock)
+                    {
+                        pending = m_Pending.Values.ToArray();
+                        m_Pending.Clear();
+                    }
+                    ResetResponseBuffer();
                 }
                 foreach (PendingOperation item in pending)
                 {
@@ -805,6 +850,11 @@ namespace RemoteExecution
                 try { m_Channel.Dispose(); }
                 catch (Exception) { }
                 FailPending(new IOException("Remote execution client disconnected."));
+                lock (m_ResponseLock)
+                {
+                    m_ResponseBuffer.Dispose();
+                    m_ResponseBuffer = new MemoryStream();
+                }
             }
 
             private sealed class PendingOperation
@@ -818,17 +868,15 @@ namespace RemoteExecution
                     ExpectedContentType = string.Empty;
                 }
 
-                internal PendingOperation(int maxResponseBytes, string expectedContentType)
+                internal PendingOperation(string expectedContentType)
                     : this()
                 {
                     IsCommand = true;
-                    MaxResponseBytes = Math.Min(maxResponseBytes,
-                        RemoteExecutionProtocol.MaxCommandResponseBytes);
+                    MaxResponseBytes = RemoteExecutionProtocol.MaxCommandResponseBytes;
                     ExpectedContentType = expectedContentType ?? string.Empty;
                 }
 
                 internal bool IsCommand { get; }
-                internal int MaxResponseBytes { get; }
                 internal string ExpectedContentType { get; }
                 internal TaskCompletionSource<RemoteCommandInfo[]> CatalogCompletion { get; }
                 internal TaskCompletionSource<RemoteExecutionResult> CommandCompletion { get; }
@@ -842,7 +890,6 @@ namespace RemoteExecution
 
                 internal void Dispose()
                 {
-                    ResultPayload?.Dispose();
                     ResultPayload = null;
                 }
             }

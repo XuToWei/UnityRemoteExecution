@@ -50,17 +50,14 @@ namespace RemoteExecution
 
     public sealed class RemoteCommandInfo
     {
-        public string Id;
+        public string TypeName;
         public string Name;
         public string Description;
         public string Category;
         public int TimeoutSeconds;
-        public int MaxRequestBytes;
-        public int MaxResponseBytes;
         public string RequestContentType;
         public string ResponseContentType;
         public bool Executable;
-        public bool RequiresMainThread;
     }
 
     public sealed class RemoteError
@@ -71,8 +68,7 @@ namespace RemoteExecution
 
     public static class RemoteExecutionProtocol
     {
-        public const ushort Version = 3;
-        public const int HeaderLength = 28;
+        public const int HeaderLength = 26;
         public const int MaxFramePayload = 1024 * 1024;
         public const int MaxChunkBytes = 60 * 1024;
         public const int MaxStringBytes = 32 * 1024;
@@ -206,17 +202,14 @@ namespace RemoteExecution
                 foreach (RemoteCommandInfo command in commands)
                 {
                     ValidateCommandInfo(command);
-                    WriteString(writer, command.Id);
+                    WriteString(writer, command.TypeName);
                     WriteString(writer, command.Name);
                     WriteString(writer, command.Description);
                     WriteString(writer, command.Category);
                     writer.Write(command.TimeoutSeconds);
-                    writer.Write(command.MaxRequestBytes);
-                    writer.Write(command.MaxResponseBytes);
                     WriteString(writer, command.RequestContentType);
                     WriteString(writer, command.ResponseContentType);
                     writer.Write(command.Executable);
-                    writer.Write(command.RequiresMainThread);
                 }
                 byte[] result = stream.ToArray();
                 if (result.Length > MaxFramePayload) throw new InvalidDataException("Command catalog is too large.");
@@ -235,17 +228,14 @@ namespace RemoteExecution
                 {
                     commands[i] = new RemoteCommandInfo
                     {
-                        Id = ReadString(reader),
+                        TypeName = ReadString(reader),
                         Name = ReadString(reader),
                         Description = ReadString(reader),
                         Category = ReadString(reader),
                         TimeoutSeconds = reader.ReadInt32(),
-                        MaxRequestBytes = reader.ReadInt32(),
-                        MaxResponseBytes = reader.ReadInt32(),
                         RequestContentType = ReadString(reader),
                         ResponseContentType = ReadString(reader),
-                        Executable = reader.ReadBoolean(),
-                        RequiresMainThread = reader.ReadBoolean()
+                        Executable = reader.ReadBoolean()
                     };
                     ValidateCommandInfo(commands[i]);
                 }
@@ -254,15 +244,15 @@ namespace RemoteExecution
             }
         }
 
-        public static byte[] EncodeCommandInputBegin(string commandId, string contentType, long length, byte[] sha256)
+        public static byte[] EncodeCommandInputBegin(string commandType, string contentType, long length, byte[] sha256)
         {
-            ValidateCommandInputIdentity(commandId, contentType);
+            ValidateCommandInputIdentity(commandType, contentType);
             if (length < 0 || length > MaxCommandRequestBytes || sha256 == null || sha256.Length != 32)
                 throw new InvalidDataException("Invalid command input metadata.");
             using (var stream = new MemoryStream())
             using (var writer = NewWriter(stream))
             {
-                WriteString(writer, commandId);
+                WriteString(writer, commandType);
                 WriteString(writer, contentType);
                 writer.Write(length);
                 writer.Write(sha256);
@@ -270,19 +260,19 @@ namespace RemoteExecution
             }
         }
 
-        public static void DecodeCommandInputBegin(byte[] payload, out string commandId, out string contentType, out long length, out byte[] sha256)
+        public static void DecodeCommandInputBegin(byte[] payload, out string commandType, out string contentType, out long length, out byte[] sha256)
         {
             using (var stream = NewStream(payload))
             using (var reader = NewReader(stream))
             {
-                commandId = ReadString(reader);
+                commandType = ReadString(reader);
                 contentType = ReadString(reader);
                 length = reader.ReadInt64();
                 sha256 = reader.ReadBytes(32);
                 if (length < 0 || length > MaxCommandRequestBytes || sha256.Length != 32)
                     throw new InvalidDataException("Invalid command input metadata.");
                 EnsureEnd(stream);
-                ValidateCommandInputIdentity(commandId, contentType);
+                ValidateCommandInputIdentity(commandType, contentType);
             }
         }
 
@@ -425,10 +415,9 @@ namespace RemoteExecution
         {
             byte[] header = new byte[HeaderLength];
             WriteUInt32(header, 0, Magic);
-            WriteUInt16(header, 4, Version);
-            header[6] = (byte)frame.Kind;
-            Buffer.BlockCopy(frame.RequestId.ToByteArray(), 0, header, 8, 16);
-            WriteUInt32(header, 24, checked((uint)frame.Payload.Length));
+            header[4] = (byte)frame.Kind;
+            Buffer.BlockCopy(frame.RequestId.ToByteArray(), 0, header, 6, 16);
+            WriteUInt32(header, 22, checked((uint)frame.Payload.Length));
             return header;
         }
 
@@ -438,14 +427,12 @@ namespace RemoteExecution
                 throw new InvalidDataException("Invalid remote execution frame header.");
             if (ReadUInt32(header, 0) != Magic)
                 throw new InvalidDataException("Invalid remote execution frame magic.");
-            if (ReadUInt16(header, 4) != Version)
-                throw new InvalidDataException("Unsupported remote execution protocol version.");
-            if (header[7] != 0)
+            if (header[5] != 0)
                 throw new InvalidDataException("Unsupported remote execution frame flags.");
-            RemoteMessageKind kind = (RemoteMessageKind)header[6];
+            RemoteMessageKind kind = (RemoteMessageKind)header[4];
             if (!Enum.IsDefined(typeof(RemoteMessageKind), kind))
                 throw new InvalidDataException("Unknown remote execution message kind.");
-            uint encodedLength = ReadUInt32(header, 24);
+            uint encodedLength = ReadUInt32(header, 22);
             if (encodedLength > MaxFramePayload)
                 throw new InvalidDataException(
                     $"Frame payload exceeds {MaxFramePayload} bytes.");
@@ -455,8 +442,8 @@ namespace RemoteExecution
         private static RemoteFrame DecodeFrameParts(byte[] header, byte[] payload)
         {
             byte[] requestId = new byte[16];
-            Buffer.BlockCopy(header, 8, requestId, 0, requestId.Length);
-            var frame = new RemoteFrame((RemoteMessageKind)header[6],
+            Buffer.BlockCopy(header, 6, requestId, 0, requestId.Length);
+            var frame = new RemoteFrame((RemoteMessageKind)header[4],
                 new Guid(requestId), payload);
             ValidateFrame(frame);
             return frame;
@@ -464,13 +451,11 @@ namespace RemoteExecution
 
         private static void ValidateCommandInfo(RemoteCommandInfo command)
         {
-            if (command == null || string.IsNullOrWhiteSpace(command.Id) ||
-                string.IsNullOrWhiteSpace(command.Name) || string.IsNullOrWhiteSpace(command.Description) ||
-                !IsValidString(command.Id) || !IsValidString(command.Name) ||
+            if (command == null || string.IsNullOrWhiteSpace(command.TypeName) ||
+                !IsValidString(command.TypeName) || !IsValidString(command.Name) ||
                 !IsValidString(command.Description) || !IsValidString(command.Category) ||
-                !IsValidString(command.RequestContentType) || !IsValidString(command.ResponseContentType) ||
-                command.MaxRequestBytes < 0 || command.MaxRequestBytes > MaxCommandRequestBytes ||
-                command.MaxResponseBytes < 0 || command.MaxResponseBytes > MaxCommandResponseBytes ||
+                !IsValidString(command.RequestContentType) ||
+                !IsValidString(command.ResponseContentType) ||
                 command.TimeoutSeconds < 1 || command.TimeoutSeconds > 3600)
                 throw new InvalidDataException("Invalid command metadata.");
         }
@@ -481,9 +466,9 @@ namespace RemoteExecution
             catch (EncoderFallbackException) { return false; }
         }
 
-        private static void ValidateCommandInputIdentity(string commandId, string contentType)
+        private static void ValidateCommandInputIdentity(string commandType, string contentType)
         {
-            if (string.IsNullOrWhiteSpace(commandId) || !IsValidString(commandId) ||
+            if (string.IsNullOrWhiteSpace(commandType) || !IsValidString(commandType) ||
                 !IsValidString(contentType))
                 throw new InvalidDataException("Invalid command ID or content type.");
         }

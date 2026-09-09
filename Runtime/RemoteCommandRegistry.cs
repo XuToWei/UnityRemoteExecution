@@ -6,105 +6,118 @@ using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using UnityEngine;
 
 namespace RemoteExecution
 {
-    public static class RemoteCommandRegistry
+    internal sealed class RemoteCommandCatalog
     {
-        public const int MaxIdLength = 1024;
-        public const int MaxDescriptionLength = 1024;
-        public const int MaxContentTypeLength = 256;
-        public const int MaxTimeoutSeconds = 3600;
-
-        private static readonly object s_Lock = new object();
         private static readonly UTF8Encoding s_Utf8 = new UTF8Encoding(false, true);
-        private static readonly Dictionary<string, RemoteCommandDescriptor> s_Commands =
-            new Dictionary<string, RemoteCommandDescriptor>(StringComparer.Ordinal);
+        private readonly Dictionary<string, RemoteCommandDescriptor> m_ByType;
 
-        public static RemoteCommandDescriptor Register(RemoteCommandDefinition definition,
-            Func<RemoteCommandContext, CancellationToken, Task<RemoteCommandResult>> handler)
+        private RemoteCommandCatalog(IReadOnlyList<RemoteCommandDescriptor> descriptors)
         {
-            if (definition == null) throw new ArgumentNullException(nameof(definition));
-            if (handler == null) throw new ArgumentNullException(nameof(handler));
-            string error = ValidateDefinition(definition);
-            if (error != null) throw new ArgumentException(error, nameof(definition));
-            var descriptor = new RemoteCommandDescriptor(definition, handler);
-            lock (s_Lock)
-            {
-                if (s_Commands.ContainsKey(descriptor.Id))
-                    throw new InvalidOperationException($"Remote command ID is duplicated: {descriptor.Id}");
-                s_Commands.Add(descriptor.Id, descriptor);
-            }
-            return descriptor;
+            Descriptors = descriptors;
+            m_ByType = descriptors.ToDictionary(item => item.TypeName,
+                StringComparer.Ordinal);
         }
 
-        public static IReadOnlyList<RemoteCommandDescriptor> RegisterProvider(
-            IRemoteCommandProvider provider)
+        internal IReadOnlyList<RemoteCommandDescriptor> Descriptors { get; }
+
+        internal static RemoteCommandCatalog Discover(IEnumerable<Type> candidateTypes)
         {
-            if (provider == null) throw new ArgumentNullException(nameof(provider));
-            var staged = new StagedRegistry();
-            provider.RegisterCommands(staged);
-            RemoteCommandDescriptor[] descriptors = staged.Descriptors.ToArray();
-            lock (s_Lock)
+            if (candidateTypes == null) throw new ArgumentNullException(nameof(candidateTypes));
+            Type[] types = candidateTypes.Where(IsCommandType)
+                .Distinct()
+                .OrderBy(type => type.Assembly.FullName, StringComparer.Ordinal)
+                .ThenBy(type => type.FullName ?? type.Name, StringComparer.Ordinal)
+                .ToArray();
+            var descriptors = new List<RemoteCommandDescriptor>(types.Length);
+            foreach (Type type in types)
             {
-                var ids = new HashSet<string>(StringComparer.Ordinal);
-                foreach (RemoteCommandDescriptor descriptor in descriptors)
+                try
                 {
-                    if (!ids.Add(descriptor.Id))
-                        throw new InvalidOperationException($"Remote command ID is duplicated in the provider: {descriptor.Id}");
-                    if (s_Commands.ContainsKey(descriptor.Id))
-                        throw new InvalidOperationException($"Remote command ID is already registered: {descriptor.Id}");
+                    var command = (IRemoteCommand)Activator.CreateInstance(type);
+                    if (command == null)
+                        throw new InvalidOperationException("Command constructor returned no instance.");
+                    ValidateCommand(type, command);
+                    descriptors.Add(new RemoteCommandDescriptor(type, command));
                 }
-                foreach (RemoteCommandDescriptor descriptor in descriptors)
-                    s_Commands.Add(descriptor.Id, descriptor);
-            }
-            return descriptors;
-        }
-
-        public static IReadOnlyList<RemoteCommandDescriptor> Snapshot()
-        {
-            lock (s_Lock)
-                return s_Commands.Values.OrderBy(item => item.Id, StringComparer.Ordinal).ToArray();
-        }
-
-        public static bool TryGet(string id, out RemoteCommandDescriptor descriptor)
-        {
-            lock (s_Lock) return s_Commands.TryGetValue(id, out descriptor);
-        }
-
-        public static void Unregister(IReadOnlyList<RemoteCommandDescriptor> descriptors)
-        {
-            if (descriptors == null) throw new ArgumentNullException(nameof(descriptors));
-            lock (s_Lock)
-            {
-                foreach (RemoteCommandDescriptor descriptor in descriptors)
+                catch (Exception exception)
                 {
-                    if (descriptor == null ||
-                        !s_Commands.TryGetValue(descriptor.Id, out RemoteCommandDescriptor existing) ||
-                        !ReferenceEquals(existing, descriptor))
-                        throw new InvalidOperationException("Remote command registration no longer matches the requested rollback.");
+                    throw new InvalidOperationException(
+                        $"Remote command '{GetTypeIdentity(type)}' could not be discovered: {exception.GetBaseException().Message}",
+                        exception);
                 }
-                foreach (RemoteCommandDescriptor descriptor in descriptors)
-                    s_Commands.Remove(descriptor.Id);
             }
+
+            var duplicate = descriptors.GroupBy(item => item.TypeName,
+                    StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1);
+            if (duplicate != null)
+                throw new InvalidOperationException(
+                    $"Remote command type '{duplicate.Key}' is duplicated.");
+            return new RemoteCommandCatalog(descriptors.OrderBy(item => item.TypeName,
+                StringComparer.Ordinal).ToArray());
         }
 
-        public static async Task<RemoteCommandResult> ExecuteAsync(RemoteCommandDescriptor descriptor,
+        internal static bool IsCommandType(Type type)
+        {
+            return type != null && type.IsClass && !type.IsAbstract &&
+                !type.ContainsGenericParameters &&
+                typeof(IRemoteCommand).IsAssignableFrom(type) &&
+                !typeof(UnityEngine.Object).IsAssignableFrom(type) &&
+                type.FullName != null &&
+                type.GetConstructor(BindingFlags.Public | BindingFlags.Instance,
+                    null, Type.EmptyTypes, null) != null;
+        }
+
+        internal bool TryGet(string typeName, out RemoteCommandDescriptor descriptor)
+        {
+            return m_ByType.TryGetValue(typeName, out descriptor);
+        }
+
+        internal bool TryGet(Type type, out RemoteCommandDescriptor descriptor)
+        {
+            return type != null && m_ByType.TryGetValue(type.FullName, out descriptor);
+        }
+
+        internal async Task<RemoteCommandResult> ExecuteAsync(RemoteCommandDescriptor descriptor,
             RemoteCommandContext context, CancellationToken cancellationToken)
         {
             if (descriptor == null) throw new ArgumentNullException(nameof(descriptor));
-            if (!descriptor.IsExecutable) throw new InvalidOperationException("Remote command is not executable.");
+            if (!descriptor.IsExecutable)
+                throw new InvalidOperationException("Remote command is not executable.");
             if (context == null) throw new ArgumentNullException(nameof(context));
             cancellationToken.ThrowIfCancellationRequested();
             if (context.CancellationToken != cancellationToken)
-                throw new InvalidOperationException("Command context cancellation token does not match the execution token.");
-            if (context.Payload.Length > descriptor.MaxRequestBytes)
-                throw new InvalidDataException($"Command request exceeds {descriptor.MaxRequestBytes} bytes.");
-            RemoteCommandResult result = await descriptor.Handler(context, cancellationToken);
-            if (result == null) throw new InvalidOperationException("Remote command returned no result.");
-            if (result.Payload.Length > descriptor.MaxResponseBytes)
-                throw new InvalidDataException($"Command response exceeds {descriptor.MaxResponseBytes} bytes.");
+                throw new InvalidOperationException(
+                    "Command context cancellation token does not match the execution token.");
+            if (context.Payload.Length > RemoteExecutionProtocol.MaxCommandRequestBytes)
+                throw new InvalidDataException(
+                    $"Command request exceeds {RemoteExecutionProtocol.MaxCommandRequestBytes} bytes.");
+            RemoteCommandResult result = await descriptor.Command.ExecuteAsync(
+                context, cancellationToken).ConfigureAwait(false);
+            if (result == null)
+                throw new InvalidOperationException("Remote command returned no result.");
+            if (result.Payload.Length > RemoteExecutionProtocol.MaxCommandResponseBytes)
+                throw new InvalidDataException(
+                    $"Command response exceeds {RemoteExecutionProtocol.MaxCommandResponseBytes} bytes.");
             return result;
+        }
+
+        internal RemoteCommandInfo[] EncodeInfos()
+        {
+            return Descriptors.Select(descriptor => new RemoteCommandInfo
+            {
+                TypeName = descriptor.TypeName,
+                Name = descriptor.Name,
+                Description = descriptor.Description,
+                Category = descriptor.Category,
+                TimeoutSeconds = descriptor.TimeoutSeconds,
+                RequestContentType = descriptor.RequestContentType,
+                ResponseContentType = descriptor.ResponseContentType,
+                Executable = descriptor.IsExecutable
+            }).ToArray();
         }
 
         internal static IEnumerable<Type> GetLoadableTypes(Assembly assembly)
@@ -118,45 +131,35 @@ namespace RemoteExecution
             catch { return Array.Empty<Type>(); }
         }
 
+        internal static string GetTypeIdentity(Type type)
+        {
+            return type?.AssemblyQualifiedName ?? type?.FullName ?? type?.Name ?? "<unknown>";
+        }
+
+        private static void ValidateCommand(Type type, IRemoteCommand command)
+        {
+            if (type.FullName == null || type.FullName.Length > RemoteExecutionProtocol.MaxStringBytes)
+                throw new InvalidDataException("Remote command type name is invalid.");
+            ValidateString(command.Name, "name", false);
+            ValidateString(command.Description, "description", false);
+            ValidateString(command.Category, "category", true);
+            ValidateString(command.RequestContentType, "request content type", true);
+            ValidateString(command.ResponseContentType, "response content type", true);
+            if (command.TimeoutSeconds < 1 || command.TimeoutSeconds > 3600)
+                throw new InvalidDataException("Invalid command timeout.");
+        }
+
+        private static void ValidateString(string value, string name, bool allowEmpty)
+        {
+            if ((!allowEmpty && string.IsNullOrWhiteSpace(value)) ||
+                GetUtf8ByteCount(value) > RemoteExecutionProtocol.MaxStringBytes)
+                throw new InvalidDataException($"Invalid command {name}.");
+        }
+
         private static int GetUtf8ByteCount(string value)
         {
             try { return s_Utf8.GetByteCount(value ?? string.Empty); }
             catch (EncoderFallbackException) { return int.MaxValue; }
-        }
-
-        private static string ValidateDefinition(RemoteCommandDefinition definition)
-        {
-            if (string.IsNullOrWhiteSpace(definition.Id) ||
-                GetUtf8ByteCount(definition.Id) > MaxIdLength) return "invalid command ID";
-            if (string.IsNullOrWhiteSpace(definition.Name) ||
-                GetUtf8ByteCount(definition.Name) > MaxDescriptionLength) return "invalid command name";
-            if (string.IsNullOrWhiteSpace(definition.Description) ||
-                GetUtf8ByteCount(definition.Description) > MaxDescriptionLength) return "invalid command description";
-            if (GetUtf8ByteCount(definition.Category) > MaxDescriptionLength) return "invalid command category";
-            if (definition.TimeoutSeconds < 1 || definition.TimeoutSeconds > MaxTimeoutSeconds) return "invalid command timeout";
-            if (definition.MaxRequestBytes < 0 || definition.MaxRequestBytes > RemoteExecutionProtocol.MaxCommandRequestBytes) return "invalid request size";
-            if (definition.MaxResponseBytes < 0 || definition.MaxResponseBytes > RemoteExecutionProtocol.MaxCommandResponseBytes) return "invalid response size";
-            if (GetUtf8ByteCount(definition.RequestContentType) > MaxContentTypeLength ||
-                GetUtf8ByteCount(definition.ResponseContentType) > MaxContentTypeLength) return "invalid content type";
-            return null;
-        }
-
-        private sealed class StagedRegistry : IRemoteCommandRegistry
-        {
-            internal List<RemoteCommandDescriptor> Descriptors { get; } =
-                new List<RemoteCommandDescriptor>();
-
-            public RemoteCommandDescriptor Register(RemoteCommandDefinition definition,
-                Func<RemoteCommandContext, CancellationToken, Task<RemoteCommandResult>> handler)
-            {
-                if (definition == null) throw new ArgumentNullException(nameof(definition));
-                if (handler == null) throw new ArgumentNullException(nameof(handler));
-                string error = ValidateDefinition(definition);
-                if (error != null) throw new ArgumentException(error, nameof(definition));
-                var descriptor = new RemoteCommandDescriptor(definition, handler);
-                Descriptors.Add(descriptor);
-                return descriptor;
-            }
         }
     }
 }
