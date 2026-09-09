@@ -700,7 +700,7 @@ namespace RemoteExecution
                 RemovePending(requestId);
                 pending.CommandCompletion.TrySetResult(new RemoteExecutionResult(
                     pending.ResultSucceeded, pending.ResultCode, pending.ResultMessage,
-                    result, pending.ResultContentType));
+                    result, pending.ResultContentType, true));
             }
 
             private void AddPending(Guid requestId, PendingOperation pending)

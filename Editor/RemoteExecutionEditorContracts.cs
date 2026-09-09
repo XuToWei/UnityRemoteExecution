@@ -54,12 +54,19 @@ namespace RemoteExecution
     {
         internal RemoteExecutionResult(bool succeeded, string code, string message,
             byte[] payload, string contentType)
+            : this(succeeded, code, message, payload, contentType, false)
+        {
+        }
+
+        internal RemoteExecutionResult(bool succeeded, string code, string message,
+            byte[] payload, string contentType, bool takeOwnership)
         {
             Succeeded = succeeded;
             Code = code ?? string.Empty;
             Message = message ?? string.Empty;
             Payload = payload == null || payload.Length == 0
-                ? Array.Empty<byte>() : (byte[])payload.Clone();
+                ? Array.Empty<byte>()
+                : takeOwnership ? payload : (byte[])payload.Clone();
             ContentType = contentType ?? string.Empty;
         }
 
