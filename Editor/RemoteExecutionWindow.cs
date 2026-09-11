@@ -429,19 +429,14 @@ namespace RemoteExecution
             EditorGUILayout.Space(6);
             float maxHeight = Mathf.Max(60f, position.height - 260f);
             float detailsHeight = Mathf.Clamp(m_OperationDetailsHeight, 60f, maxHeight);
-            if (operation.DetailsExpanded)
-                DrawOperationSplitter(detailsHeight, maxHeight);
+            DrawOperationSplitter(detailsHeight, maxHeight);
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
                 using (new EditorGUILayout.HorizontalScope())
                 {
-                    int lineEnd = operation.Status.IndexOfAny(new[] { '\r', '\n' });
-                    string summary = lineEnd < 0 ? operation.Status : operation.Status.Substring(0, lineEnd);
-                    var content = new GUIContent(summary, operation.HasFailed
-                        ? EditorGUIUtility.IconContent("console.erroricon.sml").image : null,
-                        operation.Status);
-                    operation.DetailsExpanded = EditorGUI.Foldout(
-                        EditorGUILayout.GetControlRect(), operation.DetailsExpanded, content, true);
+                    var title = new GUIContent("执行结果", operation.HasFailed
+                        ? EditorGUIUtility.IconContent("console.erroricon.sml").image : null);
+                    EditorGUI.LabelField(EditorGUILayout.GetControlRect(), title, EditorStyles.boldLabel);
                     if (GUILayout.Button(new GUIContent("Copy", "Copy the complete execution result."),
                         GUILayout.Width(52)))
                         EditorGUIUtility.systemCopyBuffer = operation.Status;
@@ -455,8 +450,7 @@ namespace RemoteExecution
                         }
                     }
                 }
-                if (operation.DetailsExpanded)
-                    DrawOperationDetails(operation, detailsHeight);
+                DrawOperationDetails(operation, detailsHeight);
             }
         }
 
@@ -701,7 +695,6 @@ namespace RemoteExecution
             internal bool IsActive => OperationTask != null && !m_Observed;
             internal bool IsCancelling { get; private set; }
             internal bool HasFailed => m_Observed && OperationTask.IsFaulted;
-            internal bool DetailsExpanded { get; set; }
             internal Vector2 DetailsScroll;
 
             internal void Start(Task<string> task)
@@ -728,7 +721,6 @@ namespace RemoteExecution
                 {
                     Status = OperationTask.Exception?.GetBaseException().Message ??
                         "Operation failed.";
-                    DetailsExpanded = true;
                     DetailsScroll = Vector2.zero;
                 }
                 else
