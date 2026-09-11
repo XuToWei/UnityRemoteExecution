@@ -1,0 +1,19 @@
+{
+  "name": "RemoteExecution.HybridCLR.Tests.Editor",
+  "rootNamespace": "RemoteExecution.Tests",
+  "references": [
+    "RemoteExecution.Runtime",
+    "RemoteExecution.HybridCLR.Runtime"
+  ],
+  "includePlatforms": ["Editor"],
+  "autoReferenced": false,
+  "optionalUnityReferences": ["TestAssemblies"],
+  "versionDefines": [
+    {
+      "name": "com.code-philosophy.hybridclr",
+      "expression": "1.0",
+      "define": "REMOTE_EXECUTION_HYBRIDCLR"
+    }
+  ],
+  "defineConstraints": ["REMOTE_EXECUTION_HYBRIDCLR"]
+}

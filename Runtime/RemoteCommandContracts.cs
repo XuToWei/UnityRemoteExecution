@@ -15,6 +15,9 @@ namespace RemoteExecution
         string RequestContentType { get; }
         string ResponseContentType { get; }
 
+        /// <summary>
+        /// Runs on Unity's main thread. Use ordinary awaits to preserve its synchronization context.
+        /// </summary>
         Task<RemoteCommandResult> ExecuteAsync(
             RemoteCommandContext context, CancellationToken cancellationToken);
     }

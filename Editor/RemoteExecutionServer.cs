@@ -56,7 +56,9 @@ namespace RemoteExecution
                 {
                     IsRunning = s_Transport != null,
                     TransportKind = s_TransportKind,
-                    TransportDescription = s_TransportDescription
+                    TransportDescription = s_TransportDescription,
+                    IsLoopbackListener = s_Transport is RemoteExecutionTcpTransport tcp &&
+                        tcp.IsLoopbackListener
                 };
             }
         }

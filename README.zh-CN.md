@@ -105,7 +105,7 @@ m_ConnectionUI.OptionsProvider = new CustomPlayerOptions();
 provider 每次连接尝试都必须返回新的 options 对象和新的 transport 实例。Transport 的所有权和释放仍由 Player API 管理，helper 不应自行释放它。指定 provider 可以保留自定义连接行为，不会被静默替换为 TCP。如果业务需要完全控制连接时机或 UI，仍可直接使用静态 API。
 
 
-包本身不限制可连接的 Player 构建类型。Editor 监听地址默认使用 `127.0.0.1`，本机连接时 `Start` 通常也传入该地址。局域网使用时，应让 Editor 监听可达的本机接口（也可监听 `0.0.0.0`），向 Player 传入 Editor 机器的实际局域网地址，并按需放行防火墙端口。`0.0.0.0` 只能用于监听，不能作为 Player 的目标地址。
+包本身不限制可连接的 Player 构建类型。Editor 监听地址默认使用 `127.0.0.1`，本机连接时 `Start` 通常也传入该地址。当 TCP 监听在回环地址（如 `127.0.0.1`）时，窗口右上角的连接状态会在实际监听端点后附上本机 IPv4 地址，优先显示带网关网卡的地址；悬停可查看其他本机地址。地址会在窗口打开、重新获得焦点或启动监听时刷新。监听地址旁的 **Reset** 按钮可还原为 `127.0.0.1`。局域网使用时，应让 Editor 监听可达的本机接口（也可监听 `0.0.0.0`），向 Player 传入 Editor 机器的实际局域网地址，并按需放行防火墙端口。`0.0.0.0` 只能用于监听，不能作为 Player 的目标地址。
 
 核心协议不认证 `ClientId`。默认 TCP 没有认证或加密；自定义传输可以提供 TLS 或认证，但业务层仍应自行定义信任策略。只能在可信开发环境中使用，并由接入项目负责生产构建的包含和启用策略。
 
@@ -135,7 +135,7 @@ RemoteExecutionEditorApi.StartServer(
 
 Channel 传输完整的 `RemoteFrame`，必须保证可靠、无丢失且严格有序。包最多同时执行一次 send 和一次 receive；`Abort()` 必须立即解除等待中的 I/O，且与 `Dispose()` 一样可安全重复调用。
 
-WebSocket 推荐将一个完整 URX3 frame 映射为一个 binary message：发送时使用 `RemoteExecutionProtocol.EncodeFrame`，接收完整消息后使用 `DecodeFrame`。WebSocket fragment 必须先重组，text message 必须拒绝。UDP 等无序协议若要接入，必须由实现层补齐排序、重传、去重和连接语义。
+WebSocket 推荐将一个完整协议帧映射为一个 binary message：发送时使用 `RemoteExecutionProtocol.EncodeFrame`，接收完整消息后使用 `DecodeFrame`。WebSocket fragment 必须先重组，text message 必须拒绝。UDP 等无序协议若要接入，必须由实现层补齐排序、重传、去重和连接语义。
 
 ## Runtime 扩展接口
 
@@ -281,7 +281,7 @@ public sealed class RemoteExecutionEntry : IHybridCLRRemoteExecutionEntry
 
 该 panel 不会编译或发送项目中的热更新程序集。动态源码引用的程序集必须已在 Player 中加载。
 
-HybridCLR 加载不是核心协议特性。Editor 把自有的版本化 HybridCLR envelope 通过普通通用命令输入帧发送。Player 在加载前完整校验 envelope 和每个 artifact 的 hash。Bundle 必须包含且仅包含一个 public concrete `IHybridCLRRemoteExecutionEntry` 实现，并提供 public 无参构造函数。加载后，适配器会在固定的 `RemoteExecution.HybridCLR.HybridCLRRemoteExecutionCommand` 请求内调用 `Task ExecuteAsync(CancellationToken)`；动态入口不会发布到命令目录。项目仍需自行完成正常的 HybridCLR AOT metadata 配置。
+HybridCLR 加载不是核心协议特性。Editor 把自有的 HybridCLR envelope 通过普通通用命令输入帧发送。Player 在加载前完整校验 envelope 和每个 artifact 的 hash。Bundle 必须包含且仅包含一个 public concrete `IHybridCLRRemoteExecutionEntry` 实现，并提供 public 无参构造函数。加载后，适配器会在固定的 `RemoteExecution.HybridCLR.HybridCLRRemoteExecutionCommand` 请求内调用 `Task ExecuteAsync(CancellationToken)`；动态入口不会发布到命令目录。项目仍需自行完成正常的 HybridCLR AOT metadata 配置。
 
 完整 envelope（含 metadata）最大 128 MiB，并会完整缓冲在内存中。程序集不能从 Player AppDomain 卸载。同名程序集 hash 变化，或加载、解析入口过程中发生失败，都必须重启 Player。部分加载无法回滚；适配器会拒绝后续 apply，避免继续扩大不一致状态。
 
@@ -299,7 +299,7 @@ HybridCLR 加载不是核心协议特性。Editor 把自有的版本化 HybridCL
 - 请求/响应大小是协议级全局限制，可以由 Player 连接配置进一步降低；command 不再声明单独的大小限制。
 - 二进制输入和输出包含总长度与 SHA-256，分片必须完整且严格有序。
 - 每个 Player 同时只执行一个 command。
-- 每个 handler 都从 Unity 主线程开始；`await` 之后的线程归属由 handler 自己负责，同步的 CPU 密集型 handler 会阻塞 Unity 帧。
+- 命令 handler 和结果处理在 Unity 主线程执行，普通 `await` 会保留 Unity 同步上下文，HybridCLR 入口也遵循这一约定。handler 主动使用 `ConfigureAwait(false)` 或后台任务时，需要在访问 Unity API 前自行切回主线程；同步的 CPU 密集型 handler 会阻塞 Unity 帧。
 - 超时和取消是协作式的；忽略取消的 handler 不能被安全强行中断。
 - 核心协议不认证 `ClientId`；默认 TCP 没有认证或加密，自定义传输的 TLS/认证由其实现负责。
 - SHA-256 只能检测意外的传输损坏，不能认证对端，也不能抵御主动篡改。
@@ -307,9 +307,9 @@ HybridCLR 加载不是核心协议特性。Editor 把自有的版本化 HybridCL
 
 ## 协议
 
-协议版本 3 使用 `URX3` frame magic，以及无认证的 `Hello(requestId) → Ready(same requestId)` 握手；`Ready` payload 必须为空。命令目录使用具体 command 类型的 `FullName`，请求/响应大小是全局限制而不是单个 command 的限制。消息编号保持显式固定：`Hello=1`、`Ready=2`、`Error=3`、`Ping=4`、`Pong=5`、`ListCommands=6`、`Commands=7`、command input begin/chunk/end 为 `8..10`、command result metadata/chunk/end 为 `11..13`、`CancelCommand=14`。
+Editor 与 Player 使用同一份包，共用一种协议格式。每帧包含 25 字节帧头：`UREX` 格式标识（4 字节）、消息类型（1 字节）、请求 ID（16 字节，按 `Guid.ToByteArray()` 顺序）和 payload 长度（4 字节小端整数），随后是 payload。连接使用无认证的 `Hello(requestId) → Ready(same requestId)` 握手；`Hello` 携带 client ID、target 和 Unity 版本，`Ready` payload 必须为空。
 
-版本 3 包含命令目录发现、通用 command request/result、取消、错误和 ping/pong。HybridCLR 的 `HCB1` envelope 版本 2 与核心协议相互独立。
+命令目录使用具体 command 类型的 `FullName`，请求/响应大小是全局限制而不是单个 command 的限制。消息编号固定：`Hello=1`、`Ready=2`、`Error=3`、`Ping=4`、`Pong=5`、`ListCommands=6`、`Commands=7`、command input begin/chunk/end 为 `8..10`、command result metadata/chunk/end 为 `11..13`、`CancelCommand=14`。HybridCLR envelope 作为普通命令 payload 传输，使用独立的 `HCLR` 格式标识，后面直接跟随 bundle ID 和 bundle 内容。
 
 ## 超时与取消
 
@@ -319,4 +319,4 @@ Player 的命令超时独立于主线程更新；同步命令也应定期检查�
 
 ## 回归测试
 
-安装与 Unity 版本匹配的 Unity Test Framework，刷新资源后在 EditMode 运行 `RemoteExecution.Tests.Editor`。以 Git 包安装时，将 `com.xw.remote-execution` 加入工程 `Packages/manifest.json` 的 `testables` 列表以启用包测试。测试使用隔离的内存通道，不启动真实连接或修改场景。
+安装与 Unity 版本匹配的 Unity Test Framework，刷新资源后在 EditMode 运行 `RemoteExecution.Tests.Editor`。安装 HybridCLR 后，还可运行 `RemoteExecution.HybridCLR.Tests.Editor` 验证 bundle 编解码。以 Git 包安装时，将 `com.xw.remote-execution` 加入工程 `Packages/manifest.json` 的 `testables` 列表以启用包测试。测试使用隔离的内存通道，不启动真实连接或修改场景。

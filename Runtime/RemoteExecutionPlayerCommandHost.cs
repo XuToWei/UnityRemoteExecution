@@ -4,15 +4,13 @@ using System.IO;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
-using UnityEngine;
 
 namespace RemoteExecution
 {
     internal sealed class RemoteExecutionPlayerCommandHost : IDisposable
     {
-        private readonly object m_CommandLock = new object();
-        private readonly object m_LifecycleLock = new object();
-        private readonly HashSet<Guid> m_ActiveRequestIds = new HashSet<Guid>();
+        // The driver dispatches lifecycle calls and frames on Unity's main thread.
+        // Command continuations also retain that context, so this state needs no locks.
         private readonly RemotePayloadReceiver m_InputReceiver = new RemotePayloadReceiver(
             RemoteExecutionProtocol.MaxCommandRequestBytes,
             RemoteExecutionProtocol.DefaultMaxCommandRequestBytes);
@@ -37,38 +35,26 @@ namespace RemoteExecution
             if (m_Catalog == null) throw new InvalidOperationException("Command host is not initialized.");
             if (configuration == null) throw new ArgumentNullException(nameof(configuration));
             if (send == null) throw new ArgumentNullException(nameof(send));
-            lock (m_LifecycleLock)
-            {
-                m_Generation = generation;
-                m_Configuration = configuration;
-                m_Send = send;
-                m_InputReceiver.Reset();
-            }
+            m_Generation = generation;
+            m_Configuration = configuration;
+            m_Send = send;
+            ResetCommandInput();
         }
 
         internal void CancelConnection(long generation)
         {
-            lock (m_LifecycleLock)
-            {
-                if (generation != m_Generation) return;
-                m_Send = null;
-                m_Configuration = null;
-            }
-            RunningCommand command;
-            lock (m_CommandLock)
-            {
-                command = m_RunningCommand?.Generation == generation ? m_RunningCommand : null;
-                m_ActiveRequestIds.Clear();
-            }
-            command?.Cancel();
+            if (generation != m_Generation) return;
+            m_Send = null;
+            m_Configuration = null;
             ResetCommandInput();
             m_Catalog = null;
+            // Keep the execution slot until the cancelled command actually finishes.
+            if (m_RunningCommand?.Generation == generation) m_RunningCommand.Cancel();
         }
 
         internal void HandleFrame(long generation, RemoteFrame frame)
         {
-            lock (m_LifecycleLock)
-                if (generation != m_Generation || m_Send == null) return;
+            if (generation != m_Generation || m_Send == null) return;
             try
             {
                 if (frame.RequestId == Guid.Empty &&
@@ -78,7 +64,7 @@ namespace RemoteExecution
                 {
                     case RemoteMessageKind.ListCommands:
                         Send(generation, RemoteMessageKind.Commands, frame.RequestId,
-                            EncodeCommands());
+                            RemoteExecutionProtocol.EncodeCommands(m_Catalog.EncodeInfos()));
                         break;
                     case RemoteMessageKind.CommandInputBegin:
                         BeginCommandInput(generation, frame);
@@ -104,9 +90,7 @@ namespace RemoteExecution
             }
             catch (Exception exception)
             {
-                Guid inputRequestId = m_IncomingCommandInput?.RequestId ?? Guid.Empty;
                 ResetCommandInput();
-                if (inputRequestId != Guid.Empty) EndRequest(generation, inputRequestId);
                 bool isCommand = IsCommandMessage(frame.Kind);
                 Send(generation,
                     isCommand ? RemoteMessageKind.CommandResult : RemoteMessageKind.Error,
@@ -123,7 +107,6 @@ namespace RemoteExecution
             if (m_Disposed) return;
             m_Disposed = true;
             CancelConnection(m_Generation);
-            m_Catalog = null;
             m_InputReceiver.Dispose();
         }
 
@@ -148,27 +131,19 @@ namespace RemoteExecution
         {
             if (m_IncomingCommandInput != null)
                 throw new InvalidOperationException("Another transfer is active.");
+            if (m_RunningCommand?.Generation == generation &&
+                m_RunningCommand.RequestId == frame.RequestId)
+                throw new InvalidDataException("Duplicate request ID.");
             RemoteExecutionProtocol.DecodeCommandInputBegin(frame.Payload,
                 out string commandType, out string contentType, out long length, out byte[] hash);
             if (!m_Catalog.TryGet(commandType, out RemoteCommandDescriptor descriptor))
                 throw new InvalidOperationException("Command is not executable.");
-            RemoteExecutionPlayerConfiguration configuration;
-            lock (m_LifecycleLock) configuration = m_Configuration;
-            if (configuration == null || length > configuration.MaxCommandRequestBytes ||
+            if (length > m_Configuration.MaxCommandRequestBytes ||
                 !ContentTypeMatches(descriptor.RequestContentType, contentType))
                 throw new InvalidDataException("Command input exceeds the command limits.");
-            BeginRequest(generation, frame.RequestId);
-            try
-            {
-                m_InputReceiver.Begin(length, hash);
-                m_IncomingCommandInput = new IncomingCommandInput(generation,
-                    frame.RequestId, commandType, contentType);
-            }
-            catch
-            {
-                EndRequest(generation, frame.RequestId);
-                throw;
-            }
+            m_InputReceiver.Begin(length, hash);
+            m_IncomingCommandInput = new IncomingCommandInput(
+                frame.RequestId, descriptor, contentType);
         }
 
         private void WriteCommandChunk(RemoteFrame frame)
@@ -185,55 +160,30 @@ namespace RemoteExecution
             RemoteExecutionProtocol.DecodeCommandEnd(frame.Payload);
             IncomingCommandInput input = m_IncomingCommandInput;
             m_IncomingCommandInput = null;
-            byte[] bytes;
-            try { bytes = m_InputReceiver.Complete(); }
-            catch
-            {
-                EndRequest(generation, frame.RequestId);
-                throw;
-            }
-            if (!m_Catalog.TryGet(input.TypeName, out RemoteCommandDescriptor descriptor))
-            {
-                EndRequest(generation, frame.RequestId);
-                throw new InvalidOperationException("Command is no longer registered.");
-            }
-            ExecuteCommand(generation, frame.RequestId, descriptor, bytes,
+            byte[] bytes = m_InputReceiver.Complete();
+            ExecuteCommand(generation, frame.RequestId, input.Descriptor, bytes,
                 input.ContentType).Forget();
         }
 
         private async Task ExecuteCommand(long generation, Guid requestId,
             RemoteCommandDescriptor descriptor, byte[] payload, string contentType)
         {
-            RemoteCommandCatalog catalog = m_Catalog;
-            if (catalog == null)
-            {
-                EndRequest(generation, requestId);
-                return;
-            }
-            RunningCommand command = null;
-            lock (m_CommandLock)
-            {
-                if (m_RunningCommand == null)
-                    m_RunningCommand = command = new RunningCommand(
-                        generation, requestId, descriptor.TimeoutSeconds);
-            }
-            if (command == null)
+            if (m_RunningCommand != null)
             {
                 Send(generation, RemoteMessageKind.CommandResult, requestId,
                     RemoteExecutionProtocol.EncodeCommandResult(false, "COMMAND_BUSY",
                         "Another command is running.", string.Empty, null));
-                EndRequest(generation, requestId);
                 return;
             }
+            var command = new RunningCommand(generation, requestId, descriptor.TimeoutSeconds);
+            m_RunningCommand = command;
             try
             {
                 var context = new RemoteCommandContext(descriptor.TypeName, "Editor", payload,
                     contentType, command.Token);
-                Task<RemoteCommandResult> execution = catalog.ExecuteAsync(
+                // Preserve Unity's synchronization context for result handling and cleanup.
+                RemoteCommandResult result = await m_Catalog.ExecuteAsync(
                     descriptor, context, command.Token);
-                if (!execution.IsCompleted)
-                    Debug.LogWarning($"[Unity.RemoteExecution] command '{descriptor.TypeName}' continued asynchronously; code after the first await is not guaranteed to run on the Unity main thread.");
-                RemoteCommandResult result = await execution.ConfigureAwait(false);
                 command.Token.ThrowIfCancellationRequested();
                 SendCommandResult(generation, requestId, result);
             }
@@ -253,25 +203,17 @@ namespace RemoteExecution
             }
             finally
             {
-                lock (m_CommandLock)
-                    if (ReferenceEquals(m_RunningCommand, command)) m_RunningCommand = null;
+                m_RunningCommand = null;
                 command.Dispose();
-                EndRequest(generation, requestId);
             }
         }
 
         private void SendCommandResult(long generation, Guid requestId,
             RemoteCommandResult result)
         {
-            byte[] payload = result.Payload ?? Array.Empty<byte>();
-            RemoteExecutionPlayerConfiguration configuration;
-            lock (m_LifecycleLock)
-            {
-                if (generation != m_Generation) return;
-                configuration = m_Configuration;
-            }
-            if (configuration == null) return;
-            if (payload.Length > configuration.MaxCommandResponseBytes)
+            if (generation != m_Generation || m_Send == null) return;
+            byte[] payload = result.Payload;
+            if (payload.Length > m_Configuration.MaxCommandResponseBytes)
                 throw new InvalidDataException(
                     "Command result exceeds the configured response limit.");
             Send(generation, RemoteMessageKind.CommandResult, requestId,
@@ -293,25 +235,16 @@ namespace RemoteExecution
 
         private void CancelCommand(long generation, RemoteFrame frame)
         {
-            if (m_IncomingCommandInput != null &&
-                m_IncomingCommandInput.Generation == generation &&
-                m_IncomingCommandInput.RequestId == frame.RequestId)
-            {
+            if (m_IncomingCommandInput?.RequestId == frame.RequestId)
                 ResetCommandInput();
-                EndRequest(generation, frame.RequestId);
-            }
-            RunningCommand command;
-            lock (m_CommandLock)
-                command = m_RunningCommand?.Generation == generation &&
-                    m_RunningCommand.RequestId == frame.RequestId ? m_RunningCommand : null;
-            command?.Cancel(remotely: true);
+            if (m_RunningCommand?.Generation == generation &&
+                m_RunningCommand.RequestId == frame.RequestId)
+                m_RunningCommand.Cancel(remotely: true);
         }
 
         private void EnsureCommandInput(Guid requestId)
         {
-            if (m_IncomingCommandInput == null ||
-                m_IncomingCommandInput.Generation != m_Generation ||
-                m_IncomingCommandInput.RequestId != requestId)
+            if (m_IncomingCommandInput?.RequestId != requestId)
                 throw new InvalidDataException("No matching command input.");
         }
 
@@ -321,50 +254,11 @@ namespace RemoteExecution
             m_InputReceiver.Reset();
         }
 
-        private void BeginRequest(long generation, Guid requestId)
-        {
-            lock (m_LifecycleLock)
-            lock (m_CommandLock)
-            {
-                if (generation != m_Generation || !m_ActiveRequestIds.Add(requestId))
-                    throw new InvalidDataException("Duplicate or retired request ID.");
-            }
-        }
-
-        private void EndRequest(long generation, Guid requestId)
-        {
-            lock (m_LifecycleLock)
-            lock (m_CommandLock)
-            {
-                if (generation == m_Generation) m_ActiveRequestIds.Remove(requestId);
-            }
-        }
-
-        private byte[] EncodeCommands()
-        {
-            RemoteExecutionPlayerConfiguration configuration;
-            lock (m_LifecycleLock) configuration = m_Configuration;
-            if (configuration == null) return RemoteExecutionProtocol.EncodeCommands(
-                Array.Empty<RemoteCommandInfo>());
-            RemoteCommandCatalog catalog = m_Catalog;
-            if (catalog == null) return RemoteExecutionProtocol.EncodeCommands(
-                Array.Empty<RemoteCommandInfo>());
-            return RemoteExecutionProtocol.EncodeCommands(
-                catalog.EncodeInfos());
-        }
-
         private void Send(long generation, RemoteMessageKind kind, Guid requestId,
             byte[] payload)
         {
-            Action<RemoteMessageKind, Guid, byte[]> send;
-            lock (m_LifecycleLock)
-            {
-                if (generation != m_Generation) return;
-                send = m_Send;
-            }
-            send?.Invoke(kind, requestId, payload);
+            if (generation == m_Generation) m_Send?.Invoke(kind, requestId, payload);
         }
-
 
         private static bool IsCommandMessage(RemoteMessageKind kind)
         {
@@ -382,25 +276,22 @@ namespace RemoteExecution
 
         private sealed class IncomingCommandInput
         {
-            internal IncomingCommandInput(long generation, Guid requestId,
-                string typeName, string contentType)
+            internal IncomingCommandInput(Guid requestId,
+                RemoteCommandDescriptor descriptor, string contentType)
             {
-                Generation = generation;
                 RequestId = requestId;
-                TypeName = typeName;
+                Descriptor = descriptor;
                 ContentType = contentType;
             }
 
-            internal long Generation { get; }
             internal Guid RequestId { get; }
-            internal string TypeName { get; }
+            internal RemoteCommandDescriptor Descriptor { get; }
             internal string ContentType { get; }
         }
 
         private sealed class RunningCommand : IDisposable
         {
             private readonly CancellationTokenSource m_Cancellation = new CancellationTokenSource();
-            private int m_CancelledRemotely;
 
             internal RunningCommand(long generation, Guid requestId, int timeoutSeconds)
             {
@@ -413,13 +304,12 @@ namespace RemoteExecution
             internal long Generation { get; }
             internal Guid RequestId { get; }
             internal CancellationToken Token { get; }
-            internal bool CancelledRemotely => Volatile.Read(ref m_CancelledRemotely) != 0;
+            internal bool CancelledRemotely { get; private set; }
 
             internal void Cancel(bool remotely = false)
             {
-                if (remotely) Interlocked.Exchange(ref m_CancelledRemotely, 1);
-                try { m_Cancellation.Cancel(); }
-                catch (ObjectDisposedException) { }
+                if (remotely) CancelledRemotely = true;
+                m_Cancellation.Cancel();
             }
 
             public void Dispose() => m_Cancellation.Dispose();

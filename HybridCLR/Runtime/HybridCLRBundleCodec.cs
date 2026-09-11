@@ -41,9 +41,7 @@ namespace RemoteExecution.HybridCLR
         public const string ContentType = "application/vnd.remote-execution.hybridclr-bundle";
         public const int MaxEnvelopeBytes = RemoteExecutionProtocol.MaxCommandRequestBytes;
         public const int MaxAssemblyCount = 256;
-        private const uint Magic = 0x31424348; // HCB1 in little-endian form.
-        private const ushort Version = 2;
-        private const ushort Flags = 0;
+        private const uint Magic = 0x524C4348; // HCLR in little-endian form.
         private const int MaxStringBytes = 32 * 1024;
         private static readonly UTF8Encoding s_Utf8 = new UTF8Encoding(false, true);
 
@@ -54,8 +52,6 @@ namespace RemoteExecution.HybridCLR
             using (var writer = new BinaryWriter(stream, s_Utf8, true))
             {
                 writer.Write(Magic);
-                writer.Write(Version);
-                writer.Write(Flags);
                 writer.Write(bundle.BundleId.ToByteArray());
                 WriteString(writer, bundle.Target);
                 writer.Write((ushort)bundle.Artifacts.Count);
@@ -97,8 +93,6 @@ namespace RemoteExecution.HybridCLR
             using (var reader = new BinaryReader(stream, s_Utf8, true))
             {
                 if (reader.ReadUInt32() != Magic) throw new InvalidDataException("Invalid HybridCLR bundle magic.");
-                if (reader.ReadUInt16() != Version) throw new InvalidDataException("Unsupported HybridCLR bundle version.");
-                if (reader.ReadUInt16() != Flags) throw new InvalidDataException("Unsupported HybridCLR bundle flags.");
                 byte[] id = ReadExactly(reader, 16);
                 Guid bundleId = new Guid(id);
                 string target = ReadString(reader);

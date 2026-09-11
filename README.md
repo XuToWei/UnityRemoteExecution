@@ -105,7 +105,7 @@ m_ConnectionUI.OptionsProvider = new CustomPlayerOptions();
 A provider must return a new options object and a new transport instance for every connection attempt. The Player API owns and disposes the transport; the helper must not dispose it. Assigning a provider preserves custom connection behavior instead of silently replacing it with TCP. Use the static API directly when the application needs complete control over connection timing or UI.
 
 
-The package does not restrict which Player build types may connect. The Editor bind address defaults to `127.0.0.1`, and `Start` commonly uses the same host for local connections. For LAN use, bind the Editor to a reachable local interface (or `0.0.0.0`), pass the Editor machine's actual LAN address to the Player, and allow the port through the firewall. `0.0.0.0` is a bind address, not a valid Player destination.
+The package does not restrict which Player build types may connect. The Editor bind address defaults to `127.0.0.1`, and `Start` commonly uses the same host for local connections. When TCP listens on a loopback address such as `127.0.0.1`, the top-right connection status appends a local IPv4 address after the actual listening endpoint, preferring adapters with a gateway. Hover over the status to see other local addresses. Addresses refresh when the window opens, regains focus, or starts listening. **Reset** beside the bind address restores `127.0.0.1`. For LAN use, bind the Editor to a reachable local interface (or `0.0.0.0`), pass the Editor machine's actual LAN address to the Player, and allow the port through the firewall. `0.0.0.0` is a bind address, not a valid Player destination.
 
 The core protocol does not authenticate `ClientId`. Bundled TCP has no authentication or encryption. A custom transport may provide TLS or authentication, but the consuming project still defines its trust policy. Use this bridge only in trusted development environments and control its production-build inclusion and enablement.
 
@@ -135,7 +135,7 @@ Each transport supplies a short, stable `Kind` such as `"TCP"`, `"WebSocket"`, o
 
 A channel carries complete `RemoteFrame` values and must provide reliable, lossless, strictly ordered delivery. The package performs at most one send and one receive concurrently. `Abort()` must promptly unblock pending I/O and, like `Dispose()`, be safely repeatable.
 
-For WebSocket, map one complete URX3 frame to one binary message: use `RemoteExecutionProtocol.EncodeFrame` for sending and `DecodeFrame` after receiving a complete message. Reassemble WebSocket fragments first and reject text messages. An unordered transport such as UDP must provide ordering, retransmission, duplicate suppression, and connection semantics beneath the channel contract.
+For WebSocket, map one complete protocol frame to one binary message: use `RemoteExecutionProtocol.EncodeFrame` for sending and `DecodeFrame` after receiving a complete message. Reassemble WebSocket fragments first and reject text messages. An unordered transport such as UDP must provide ordering, retransmission, duplicate suppression, and connection semantics beneath the channel contract.
 
 ## Runtime extension API
 
@@ -284,7 +284,7 @@ The entry must be a public concrete class with a public parameterless constructo
 
 The panel does not compile or send project hot-update assemblies. Any assemblies referenced by the dynamic source must already be loaded in the Player.
 
-HybridCLR loading is not a core protocol feature. The Editor serializes a versioned HybridCLR-owned envelope and sends it through ordinary generic command input frames. The Player adapter validates the entire envelope and its per-artifact hashes before loading. A bundle must contain exactly one public concrete `IHybridCLRRemoteExecutionEntry` implementation with a public parameterless constructor. After loading, the adapter invokes `Task ExecuteAsync(CancellationToken)` inside the fixed `RemoteExecution.HybridCLR.HybridCLRRemoteExecutionCommand` request. The dynamic entry is not published in the command catalog. Projects remain responsible for their normal HybridCLR AOT metadata configuration.
+HybridCLR loading is not a core protocol feature. The Editor serializes a HybridCLR-owned envelope and sends it through ordinary generic command input frames. The Player adapter validates the entire envelope and its per-artifact hashes before loading. A bundle must contain exactly one public concrete `IHybridCLRRemoteExecutionEntry` implementation with a public parameterless constructor. After loading, the adapter invokes `Task ExecuteAsync(CancellationToken)` inside the fixed `RemoteExecution.HybridCLR.HybridCLRRemoteExecutionCommand` request. The dynamic entry is not published in the command catalog. Projects remain responsible for their normal HybridCLR AOT metadata configuration.
 
 The complete envelope, including metadata, is limited to 128 MiB and is buffered in memory. Assemblies cannot be unloaded from the Player AppDomain. Reapplying the same name with a different hash, or a failure while loading or resolving the entry, requires restarting the Player. A partial load cannot be rolled back; the adapter rejects later apply attempts to avoid expanding an inconsistent state.
 
@@ -302,7 +302,7 @@ Without HybridCLR, the adapter command and HybridCLR panel are absent. The Comma
 - Global request/response limits are protocol-wide and may be lowered by the Player connection configuration; commands no longer declare individual size limits.
 - Binary input and output include total length and SHA-256, and chunks must be complete and ordered.
 - Each Player executes at most one command at a time.
-- Every handler starts on Unity's main thread. Code after an `await` is responsible for its own thread affinity; synchronous CPU-heavy handlers block the Unity frame.
+- Command handlers and result processing run on Unity's main thread. Ordinary `await` preserves Unity's synchronization context, including in HybridCLR entries. Handlers that explicitly use `ConfigureAwait(false)` or background work must return to the main thread before accessing Unity APIs; synchronous CPU-heavy handlers block the Unity frame.
 - Timeouts and cancellation are cooperative; a handler that ignores cancellation cannot be safely interrupted.
 - The core protocol does not authenticate `ClientId`; bundled TCP is unauthenticated and unencrypted, while a custom transport owns any TLS/authentication policy.
 - SHA-256 checks detect accidental transfer corruption, but do not authenticate the peer or protect against active tampering.
@@ -310,9 +310,9 @@ Without HybridCLR, the adapter command and HybridCLR panel are absent. The Comma
 
 ## Protocol
 
-Protocol version 3 uses the `URX3` frame magic and an unauthenticated `Hello(requestId) → Ready(same requestId)` handshake; `Ready` must have an empty payload. Command catalog entries use the concrete command type's `FullName`; request/response size limits are global rather than per command. Message numbers remain explicit: `Hello=1`, `Ready=2`, `Error=3`, `Ping=4`, `Pong=5`, `ListCommands=6`, `Commands=7`, command input begin/chunk/end `=8..10`, command result metadata/chunk/end `=11..13`, and `CancelCommand=14`.
+Editor and Player use the same package release and share one protocol format. Each frame has a 25-byte header: the `UREX` format marker (4 bytes), message kind (1 byte), request ID (16 bytes, in `Guid.ToByteArray()` order), and payload length (4-byte little-endian integer), followed by the payload. The handshake is an unauthenticated `Hello(requestId) → Ready(same requestId)` exchange; `Hello` carries the client ID, target, and Unity version, while `Ready` must have an empty payload.
 
-Version 3 contains command-catalog discovery, generic command request/result transfer, cancellation, errors, and ping/pong. The HybridCLR `HCB1` envelope version 2 is independent from the core protocol.
+Command catalog entries use the concrete command type's `FullName`; request/response size limits are global rather than per command. Message numbers are fixed: `Hello=1`, `Ready=2`, `Error=3`, `Ping=4`, `Pong=5`, `ListCommands=6`, `Commands=7`, command input begin/chunk/end `=8..10`, command result metadata/chunk/end `=11..13`, and `CancelCommand=14`. The HybridCLR envelope is an ordinary command payload with its own `HCLR` format marker followed directly by the bundle ID and bundle contents.
 
 ## Timeouts and cancellation
 
@@ -322,4 +322,4 @@ A failure with no payload and no content type preserves its remote error code. R
 
 ## Regression tests
 
-Install a Unity Test Framework version compatible with your Editor, refresh assets, and run `RemoteExecution.Tests.Editor` in EditMode. When installed as a Git package, add `com.xw.remote-execution` to the project manifest `testables` array to enable package tests. Tests use isolated in-memory channels without starting real connections or modifying scenes.
+Install a Unity Test Framework version compatible with your Editor, refresh assets, and run `RemoteExecution.Tests.Editor` in EditMode. With HybridCLR installed, also run `RemoteExecution.HybridCLR.Tests.Editor` for bundle encoding and decoding. When installed as a Git package, add `com.xw.remote-execution` to the project manifest `testables` array to enable package tests. Tests use isolated in-memory channels without starting real connections or modifying scenes.

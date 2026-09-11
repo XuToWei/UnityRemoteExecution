@@ -42,6 +42,8 @@ namespace RemoteExecution
         {
             m_Role = role;
             m_Address = address;
+            IsLoopbackListener = role == TransportRole.Server &&
+                IPAddress.IsLoopback(IPAddress.Parse(address));
             m_ConfiguredPort = port;
             m_Port = port;
             string authority = FormatAuthority(address, port);
@@ -106,6 +108,7 @@ namespace RemoteExecution
         public const string DefaultKind = "TCP";
         public string Kind => DefaultKind;
         public string ConfigurationKey { get; }
+        internal bool IsLoopbackListener { get; }
 
         public string Description
         {

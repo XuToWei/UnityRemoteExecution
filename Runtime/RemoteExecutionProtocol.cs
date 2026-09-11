@@ -45,7 +45,6 @@ namespace RemoteExecution
         public string ClientId;
         public string Target;
         public string UnityVersion;
-        public string RuntimeVersion;
     }
 
     public sealed class RemoteCommandInfo
@@ -68,7 +67,7 @@ namespace RemoteExecution
 
     public static class RemoteExecutionProtocol
     {
-        public const int HeaderLength = 26;
+        public const int HeaderLength = 25;
         public const int MaxFramePayload = 1024 * 1024;
         public const int MaxChunkBytes = 60 * 1024;
         public const int MaxStringBytes = 32 * 1024;
@@ -76,7 +75,7 @@ namespace RemoteExecution
         public const int MaxCommandResponseBytes = 64 * 1024 * 1024;
         public const int DefaultMaxCommandRequestBytes = 16 * 1024 * 1024;
         public const int DefaultMaxCommandResponseBytes = 16 * 1024 * 1024;
-        private const uint Magic = 0x33585255; // URX3 in little-endian form.
+        private const uint Magic = 0x58455255; // UREX in little-endian form.
         private static readonly UTF8Encoding s_Utf8 = new UTF8Encoding(false, true);
 
         public static async Task<RemoteFrame> ReadFrameAsync(Stream stream,
@@ -159,7 +158,6 @@ namespace RemoteExecution
                 WriteString(writer, hello.ClientId);
                 WriteString(writer, hello.Target);
                 WriteString(writer, hello.UnityVersion);
-                WriteString(writer, hello.RuntimeVersion);
                 return stream.ToArray();
             }
         }
@@ -173,8 +171,7 @@ namespace RemoteExecution
                 {
                     ClientId = ReadString(reader),
                     Target = ReadString(reader),
-                    UnityVersion = ReadString(reader),
-                    RuntimeVersion = ReadString(reader)
+                    UnityVersion = ReadString(reader)
                 };
                 EnsureEnd(stream);
                 if (string.IsNullOrWhiteSpace(hello.ClientId) ||
@@ -416,8 +413,8 @@ namespace RemoteExecution
             byte[] header = new byte[HeaderLength];
             WriteUInt32(header, 0, Magic);
             header[4] = (byte)frame.Kind;
-            Buffer.BlockCopy(frame.RequestId.ToByteArray(), 0, header, 6, 16);
-            WriteUInt32(header, 22, checked((uint)frame.Payload.Length));
+            Buffer.BlockCopy(frame.RequestId.ToByteArray(), 0, header, 5, 16);
+            WriteUInt32(header, 21, checked((uint)frame.Payload.Length));
             return header;
         }
 
@@ -427,12 +424,10 @@ namespace RemoteExecution
                 throw new InvalidDataException("Invalid remote execution frame header.");
             if (ReadUInt32(header, 0) != Magic)
                 throw new InvalidDataException("Invalid remote execution frame magic.");
-            if (header[5] != 0)
-                throw new InvalidDataException("Unsupported remote execution frame flags.");
             RemoteMessageKind kind = (RemoteMessageKind)header[4];
             if (!Enum.IsDefined(typeof(RemoteMessageKind), kind))
                 throw new InvalidDataException("Unknown remote execution message kind.");
-            uint encodedLength = ReadUInt32(header, 22);
+            uint encodedLength = ReadUInt32(header, 21);
             if (encodedLength > MaxFramePayload)
                 throw new InvalidDataException(
                     $"Frame payload exceeds {MaxFramePayload} bytes.");
@@ -442,7 +437,7 @@ namespace RemoteExecution
         private static RemoteFrame DecodeFrameParts(byte[] header, byte[] payload)
         {
             byte[] requestId = new byte[16];
-            Buffer.BlockCopy(header, 6, requestId, 0, requestId.Length);
+            Buffer.BlockCopy(header, 5, requestId, 0, requestId.Length);
             var frame = new RemoteFrame((RemoteMessageKind)header[4],
                 new Guid(requestId), payload);
             ValidateFrame(frame);

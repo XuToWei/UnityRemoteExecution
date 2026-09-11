@@ -5,7 +5,6 @@ using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
-using UnityEngine;
 
 namespace RemoteExecution
 {
@@ -92,7 +91,7 @@ namespace RemoteExecution
                 throw new InvalidDataException(
                     $"Command request exceeds {RemoteExecutionProtocol.MaxCommandRequestBytes} bytes.");
             RemoteCommandResult result = await descriptor.Command.ExecuteAsync(
-                context, cancellationToken).ConfigureAwait(false);
+                context, cancellationToken);
             if (result == null)
                 throw new InvalidOperationException("Remote command returned no result.");
             if (result.Payload.Length > RemoteExecutionProtocol.MaxCommandResponseBytes)

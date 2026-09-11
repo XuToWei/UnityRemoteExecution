@@ -152,6 +152,7 @@ namespace RemoteExecution
         internal bool IsRunning;
         internal string TransportKind;
         internal string TransportDescription;
+        internal bool IsLoopbackListener;
     }
 
     public static class RemoteExecutionEditorApi

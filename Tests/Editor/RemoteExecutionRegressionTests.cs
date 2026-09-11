@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -9,6 +10,7 @@ using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
+using UnityEngine.TestTools;
 
 namespace RemoteExecution.Tests
 {
@@ -20,6 +22,8 @@ namespace RemoteExecution.Tests
             TestCommand<int>.Mode = "echo";
             TestCommand<int>.CancellationObserved = false;
             TestCommand<int>.Deferred = null;
+            TestCommand<int>.StartThreadId = 0;
+            TestCommand<int>.ResumeThreadId = 0;
         }
 
         [TearDown]
@@ -61,8 +65,8 @@ namespace RemoteExecution.Tests
                 Assert.Throws<InvalidDataException>(() => Result(session.Execute()));
         }
 
-        [Test]
-        public void RemoteCancellationPreservesItsErrorCode()
+        [UnityTest]
+        public IEnumerator RemoteCancellationPreservesItsErrorCode()
         {
             TestCommand<int>.Mode = "waitForCancellation";
             using (var session = new SessionHarness(true))
@@ -70,7 +74,10 @@ namespace RemoteExecution.Tests
                 Task<RemoteExecutionResult> operation = session.Execute();
                 session.Host.Handle(new RemoteFrame(RemoteMessageKind.CancelCommand,
                     session.Channel.RequestId, Array.Empty<byte>()));
+                yield return WaitForCompletion(operation);
                 Assert.That(Result(operation).Code, Is.EqualTo("COMMAND_CANCELLED"));
+                Assert.That(session.Host.LastResponseThreadId,
+                    Is.EqualTo(Thread.CurrentThread.ManagedThreadId));
             }
         }
 
@@ -213,12 +220,56 @@ namespace RemoteExecution.Tests
             }
         }
 
-        [Test]
-        public void AsynchronousCommandAlsoTimesOutWithoutDriverUpdate()
+        [UnityTest]
+        public IEnumerator AsynchronousCommandAlsoTimesOutWithoutDriverUpdate()
         {
             TestCommand<int>.Mode = "waitForCancellation";
             using (var session = new SessionHarness(true))
-                Assert.That(Result(session.Execute()).Code, Is.EqualTo("COMMAND_TIMED_OUT"));
+            {
+                Task<RemoteExecutionResult> operation = session.Execute();
+                yield return WaitForCompletion(operation);
+                Assert.That(Result(operation).Code, Is.EqualTo("COMMAND_TIMED_OUT"));
+                Assert.That(session.Host.LastResponseThreadId,
+                    Is.EqualTo(Thread.CurrentThread.ManagedThreadId));
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator AsynchronousHandlerAndResultStayOnMainThread()
+        {
+            TestCommand<int>.Mode = "awaitDeferred";
+            TestCommand<int>.Deferred = new TaskCompletionSource<RemoteCommandResult>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            int mainThreadId = Thread.CurrentThread.ManagedThreadId;
+            using (var session = new SessionHarness(true))
+            {
+                Task<RemoteExecutionResult> operation = session.Execute();
+                Assert.That(operation.IsCompleted, Is.False);
+                Assert.That(TestCommand<int>.StartThreadId, Is.EqualTo(mainThreadId));
+                TestCommand<int>.Deferred.SetResult(RemoteCommandResult.Success(
+                    contentType: "application/octet-stream"));
+                yield return WaitForCompletion(operation);
+                Assert.That(Result(operation).Succeeded, Is.True);
+                Assert.That(TestCommand<int>.ResumeThreadId, Is.EqualTo(mainThreadId));
+                Assert.That(session.Host.LastResponseThreadId, Is.EqualTo(mainThreadId));
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator AsynchronousFailureIsReportedOnMainThread()
+        {
+            TestCommand<int>.Mode = "deferred";
+            TestCommand<int>.Deferred = new TaskCompletionSource<RemoteCommandResult>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            int mainThreadId = Thread.CurrentThread.ManagedThreadId;
+            using (var session = new SessionHarness(true))
+            {
+                Task<RemoteExecutionResult> operation = session.Execute();
+                TestCommand<int>.Deferred.SetException(new InvalidOperationException("test failure"));
+                yield return WaitForCompletion(operation);
+                Assert.That(Result(operation).Code, Is.EqualTo("COMMAND_EXECUTION_FAILED"));
+                Assert.That(session.Host.LastResponseThreadId, Is.EqualTo(mainThreadId));
+            }
         }
 
         [TestCase("hash")]
@@ -266,8 +317,53 @@ namespace RemoteExecution.Tests
             }
         }
 
+        [UnityTest]
+        public IEnumerator RunningRequestIdCannotBeReusedUntilCommandFinishes()
+        {
+            TestCommand<int>.Mode = "deferred";
+            TestCommand<int>.Deferred = new TaskCompletionSource<RemoteCommandResult>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            using (var host = new HostHarness())
+            {
+                Guid id = Guid.NewGuid();
+                host.Begin(id, Array.Empty<byte>());
+                host.End(id);
+                host.Begin(id, Array.Empty<byte>());
+                Assert.That(ResponseCode(host.Responses.Single()), Is.EqualTo("PROTOCOL_ERROR"));
+                host.ClearResponses();
+
+                var completed = new TaskCompletionSource<bool>();
+                host.OnResponse = frame => completed.TrySetResult(true);
+                TestCommand<int>.Deferred.SetResult(RemoteCommandResult.Success());
+                yield return WaitForCompletion(completed.Task);
+                Assert.That(ResponseCode(host.Responses.Single()), Is.Empty);
+
+                host.ClearResponses();
+                TestCommand<int>.Mode = "echo";
+                host.Begin(id, Array.Empty<byte>());
+                host.End(id);
+                Assert.That(ResponseCode(host.Responses.Single()), Is.Empty);
+            }
+        }
+
         [Test]
-        public void OldCommandKeepsExecutionSlotUntilItFinishesAfterReconnect()
+        public void CancelledInputCanReuseItsRequestId()
+        {
+            using (var host = new HostHarness())
+            {
+                Guid id = Guid.NewGuid();
+                host.Begin(id, new byte[4]);
+                host.Chunk(id, 0, new byte[2]);
+                host.Handle(new RemoteFrame(RemoteMessageKind.CancelCommand, id, Array.Empty<byte>()));
+                host.Begin(id, new byte[1]);
+                host.Chunk(id, 0, new byte[1]);
+                host.End(id);
+                Assert.That(ResponseCode(host.Responses[0]), Is.Empty);
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator OldCommandKeepsExecutionSlotUntilItFinishesAfterReconnect()
         {
             TestCommand<int>.Mode = "deferred";
             TestCommand<int>.Deferred = new TaskCompletionSource<RemoteCommandResult>(
@@ -279,20 +375,25 @@ namespace RemoteExecution.Tests
                 host.End(oldId);
                 host.Reconnect();
                 TestCommand<int>.Mode = "echo";
-                Guid busyId = Guid.NewGuid();
+                Guid busyId = oldId;
                 host.Begin(busyId, Array.Empty<byte>());
                 host.End(busyId);
                 Assert.That(ResponseCode(host.Responses[0]), Is.EqualTo("COMMAND_BUSY"));
+                host.ClearResponses();
 
                 TestCommand<int>.Deferred.SetResult(RemoteCommandResult.Success());
-                Assert.That(SpinWait.SpinUntil(() =>
+                var watch = Stopwatch.StartNew();
+                bool completed = false;
+                while (!completed && watch.Elapsed < TimeSpan.FromSeconds(3))
                 {
+                    yield return null;
                     Guid nextId = Guid.NewGuid();
                     host.Begin(nextId, Array.Empty<byte>());
                     host.End(nextId);
-                    return host.Responses.Any(frame => frame.RequestId == nextId &&
+                    completed = host.Responses.Any(frame => frame.RequestId == nextId &&
                         frame.Kind == RemoteMessageKind.CommandResult && ResponseCode(frame) == "");
-                }, TimeSpan.FromSeconds(3)), Is.True);
+                }
+                Assert.That(completed, Is.True, "The completed command must release its execution slot.");
                 Assert.That(host.Responses.Any(frame => frame.RequestId == oldId), Is.False,
                     "An old generation must never publish a result on the replacement connection.");
             }
@@ -316,6 +417,14 @@ namespace RemoteExecution.Tests
             Assert.That(SpinWait.SpinUntil(() => task.IsCompleted,
                 TimeSpan.FromSeconds(seconds)), Is.True, "Operation did not terminate.");
         }
+
+        private static IEnumerator WaitForCompletion(Task task)
+        {
+            var watch = Stopwatch.StartNew();
+            while (!task.IsCompleted && watch.Elapsed < TimeSpan.FromSeconds(3))
+                yield return null;
+            Assert.That(task.IsCompleted, Is.True, "Operation did not terminate.");
+        }
     }
 
     // Open generic types are excluded from production command discovery.
@@ -324,6 +433,8 @@ namespace RemoteExecution.Tests
         public static string Mode;
         public static bool CancellationObserved;
         public static TaskCompletionSource<RemoteCommandResult> Deferred;
+        public static int StartThreadId;
+        public static int ResumeThreadId;
         public string Name => "Test command";
         public string Description => "Isolated regression command";
         public string Category => "Tests";
@@ -334,6 +445,8 @@ namespace RemoteExecution.Tests
         public Task<RemoteCommandResult> ExecuteAsync(RemoteCommandContext context,
             CancellationToken cancellationToken)
         {
+            StartThreadId = Thread.CurrentThread.ManagedThreadId;
+            if (Mode == "awaitDeferred") return AwaitDeferred();
             if (Mode == "deferred") return Deferred.Task;
             if (Mode == "exception") throw new InvalidOperationException("test failure");
             if (Mode == "failure")
@@ -356,6 +469,13 @@ namespace RemoteExecution.Tests
             }
             return Task.FromResult(RemoteCommandResult.Success("", context.Payload,
                 ResponseContentType));
+        }
+
+        private static async Task<RemoteCommandResult> AwaitDeferred()
+        {
+            RemoteCommandResult result = await Deferred.Task;
+            ResumeThreadId = Thread.CurrentThread.ManagedThreadId;
+            return result;
         }
 
         private static async Task<RemoteCommandResult> WaitForCancellation(CancellationToken token)
@@ -388,14 +508,18 @@ namespace RemoteExecution.Tests
 
     internal sealed class HostHarness : IDisposable
     {
+        private readonly SynchronizationContext m_MainThreadContext = SynchronizationContext.Current;
+        private readonly int m_MainThreadId = Thread.CurrentThread.ManagedThreadId;
         private readonly object m_Host;
         private readonly object m_Catalog;
         private readonly object m_Configuration;
         private readonly Action<RemoteMessageKind, Guid, byte[]> m_Send;
         private long m_Generation = 1;
+        private bool m_Disposed;
         private readonly List<RemoteFrame> m_Responses = new List<RemoteFrame>();
         internal Action<RemoteFrame> OnResponse;
-        internal RemoteFrame[] Responses { get { lock (m_Responses) return m_Responses.ToArray(); } }
+        internal int LastResponseThreadId;
+        internal RemoteFrame[] Responses => m_Responses.ToArray();
 
         internal HostHarness()
         {
@@ -411,8 +535,9 @@ namespace RemoteExecution.Tests
             TestReflection.Set(m_Host, "m_Catalog", m_Catalog);
             m_Send = (kind, id, payload) =>
             {
+                LastResponseThreadId = Thread.CurrentThread.ManagedThreadId;
                 var frame = new RemoteFrame(kind, id, payload);
-                lock (m_Responses) m_Responses.Add(frame);
+                m_Responses.Add(frame);
                 OnResponse?.Invoke(frame);
             };
             TestReflection.Call(m_Host, "BeginConnection", m_Generation, m_Configuration, m_Send);
@@ -424,8 +549,18 @@ namespace RemoteExecution.Tests
             TestReflection.Set(m_Host, "m_Catalog", m_Catalog);
             TestReflection.Call(m_Host, "BeginConnection", ++m_Generation, m_Configuration, m_Send);
         }
-        internal void Handle(RemoteFrame frame) => TestReflection.Call(m_Host, "HandleFrame", m_Generation, frame);
-        internal void ClearResponses() { lock (m_Responses) m_Responses.Clear(); }
+        internal void Handle(RemoteFrame frame)
+        {
+            // Match the Player driver's dispatch when the Editor sends from a worker thread.
+            if (Thread.CurrentThread.ManagedThreadId != m_MainThreadId)
+            {
+                m_MainThreadContext.Post(_ => Handle(frame), null);
+                return;
+            }
+            if (!m_Disposed) TestReflection.Call(m_Host, "HandleFrame", m_Generation, frame);
+        }
+
+        internal void ClearResponses() => m_Responses.Clear();
         internal void Begin(Guid id, byte[] payload)
         {
             using (var sha = SHA256.Create())
@@ -438,7 +573,11 @@ namespace RemoteExecution.Tests
                 RemoteExecutionProtocol.EncodeCommandChunk(offset, payload, 0, payload.Length)));
         internal void End(Guid id) => Handle(new RemoteFrame(RemoteMessageKind.CommandInputEnd,
             id, RemoteExecutionProtocol.EncodeCommandEnd()));
-        public void Dispose() => ((IDisposable)m_Host).Dispose();
+        public void Dispose()
+        {
+            m_Disposed = true;
+            ((IDisposable)m_Host).Dispose();
+        }
     }
 
     internal sealed class SessionHarness : IDisposable

@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -25,6 +28,7 @@ namespace RemoteExecution
         private bool m_Enabled;
         private int m_ContextGeneration;
         private string m_WindowStatus;
+        private string[] m_LocalIpAddresses = Array.Empty<string>();
 
         [MenuItem("Window/Remote Execution")]
         private static void Open()
@@ -37,7 +41,35 @@ namespace RemoteExecution
             m_Enabled = true;
             m_ContextGeneration++;
             DiscoverPanels();
+            RefreshLocalIpAddresses();
             EditorApplication.update += OnEditorUpdate;
+        }
+
+        private void OnFocus() => RefreshLocalIpAddresses();
+
+        private void RefreshLocalIpAddresses()
+        {
+            try
+            {
+                m_LocalIpAddresses = NetworkInterface.GetAllNetworkInterfaces()
+                    .Where(adapter => adapter.OperationalStatus == OperationalStatus.Up &&
+                        adapter.NetworkInterfaceType != NetworkInterfaceType.Loopback &&
+                        adapter.NetworkInterfaceType != NetworkInterfaceType.Tunnel)
+                    .Select(adapter => adapter.GetIPProperties())
+                    .OrderByDescending(properties => properties.GatewayAddresses.Any(gateway =>
+                        gateway.Address.AddressFamily == AddressFamily.InterNetwork &&
+                        !gateway.Address.Equals(IPAddress.Any)))
+                    .SelectMany(properties => properties.UnicastAddresses)
+                    .Where(address => address.Address.AddressFamily == AddressFamily.InterNetwork &&
+                        !IPAddress.IsLoopback(address.Address))
+                    .Select(address => address.Address.ToString())
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
+            }
+            catch (Exception)
+            {
+                m_LocalIpAddresses = Array.Empty<string>();
+            }
         }
 
         private void OnDisable()
@@ -98,12 +130,14 @@ namespace RemoteExecution
         {
             using (new EditorGUILayout.HorizontalScope())
             {
-                EditorGUILayout.LabelField("Unity Remote Execution", EditorStyles.boldLabel);
+                GUILayout.Label("Unity Remote Execution", EditorStyles.boldLabel,
+                    GUILayout.ExpandWidth(false));
                 GUILayout.FlexibleSpace();
                 bool isRunning = serverStatus.IsRunning;
                 var statusStyle = new GUIStyle(EditorStyles.miniLabel)
                 {
-                    fontStyle = FontStyle.Bold
+                    fontStyle = FontStyle.Bold,
+                    alignment = TextAnchor.MiddleRight
                 };
                 statusStyle.normal.textColor = isRunning
                     ? (EditorGUIUtility.isProSkin
@@ -112,10 +146,24 @@ namespace RemoteExecution
                     : (EditorGUIUtility.isProSkin
                         ? new Color(1f, 0.48f, 0.43f)
                         : new Color(0.72f, 0.10f, 0.08f));
-                GUILayout.Label(isRunning
-                    ? $"Listening · {serverStatus.TransportDescription}"
-                    : "Stopped", statusStyle);
+                GUILayout.Label(GetHeaderConnectionInfo(serverStatus), statusStyle,
+                    GUILayout.MinWidth(0));
             }
+        }
+
+        private GUIContent GetHeaderConnectionInfo(RemoteExecutionServerStatus serverStatus)
+        {
+            if (!serverStatus.IsRunning) return new GUIContent("Stopped");
+            string text = $"Listening · {serverStatus.TransportDescription}";
+            string tooltip = serverStatus.TransportDescription;
+            if (serverStatus.IsLoopbackListener && m_LocalIpAddresses.Length > 0)
+            {
+                text += $" · Local IP: {m_LocalIpAddresses[0]}";
+                tooltip += $"\nLocal IPv4: {string.Join(", ", m_LocalIpAddresses)}" +
+                    "\nLoopback listening accepts local connections only. For a LAN Player, " +
+                    "set Bind Address to a local IP or 0.0.0.0.";
+            }
+            return new GUIContent(text, tooltip);
         }
 
         private void DrawSectionToolbar()
@@ -220,7 +268,17 @@ namespace RemoteExecution
             }
             else
             {
-                m_Address = EditorGUILayout.TextField("Bind Address", m_Address);
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    m_Address = EditorGUILayout.TextField("Bind Address", m_Address);
+                    if (GUILayout.Button(
+                        new GUIContent("Reset", "Restore Bind Address to 127.0.0.1."),
+                        GUILayout.Width(72)))
+                    {
+                        m_Address = "127.0.0.1";
+                        GUI.FocusControl(null);
+                    }
+                }
                 using (new EditorGUILayout.HorizontalScope())
                 {
                     m_Port = EditorGUILayout.IntField("Port", m_Port);
@@ -248,6 +306,7 @@ namespace RemoteExecution
                         try
                         {
                             RemoteExecutionEditorApi.StartServer(m_Address, m_Port);
+                            RefreshLocalIpAddresses();
                             m_WindowStatus = null;
                         }
                         catch (Exception exception)

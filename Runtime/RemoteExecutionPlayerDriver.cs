@@ -1,14 +1,13 @@
 using System;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using UnityEngine;
 
 namespace RemoteExecution
 {
-    [AddComponentMenu("")]
     internal sealed class RemoteExecutionPlayerDriver : MonoBehaviour
     {
-        private readonly Queue<QueuedAction> m_MainThreadActions = new Queue<QueuedAction>();
-        private readonly object m_ActionLock = new object();
+        private readonly ConcurrentQueue<QueuedAction> m_MainThreadActions =
+            new ConcurrentQueue<QueuedAction>();
         private RemoteExecutionPlayerCommandHost m_CommandHost;
         private RemoteExecutionPlayerConnection m_Connection;
         private RemoteExecutionPlayerConfiguration m_Configuration;
@@ -89,7 +88,7 @@ namespace RemoteExecution
             long generation = ++m_Generation;
             m_Configuration = null;
             DisposeTransport(configuration?.Transport);
-            ClearMainThreadActions();
+            m_MainThreadActions.Clear();
             RemoteExecutionPlayerApi.SetState(this, generation,
                 RemoteExecutionConnectionState.Disconnected, null);
         }
@@ -126,14 +125,8 @@ namespace RemoteExecution
 
         private void Update()
         {
-            while (true)
+            while (m_MainThreadActions.TryDequeue(out QueuedAction queued))
             {
-                QueuedAction queued;
-                lock (m_ActionLock)
-                {
-                    if (m_MainThreadActions.Count == 0) break;
-                    queued = m_MainThreadActions.Dequeue();
-                }
                 if (queued.Generation != m_Generation) continue;
                 try { queued.Action(); }
                 catch (Exception exception) { Debug.LogException(exception); }
@@ -152,7 +145,7 @@ namespace RemoteExecution
             long previousGeneration = m_Generation;
             RetireConnection();
             ++m_Generation;
-            ClearMainThreadActions();
+            m_MainThreadActions.Clear();
             m_CommandHost?.CancelConnection(previousGeneration);
             m_CommandHost?.Dispose();
             m_CommandHost = null;
@@ -164,13 +157,7 @@ namespace RemoteExecution
         private void Enqueue(long generation, Action action)
         {
             if (action == null || m_Destroying) return;
-            lock (m_ActionLock)
-                m_MainThreadActions.Enqueue(new QueuedAction(generation, action));
-        }
-
-        private void ClearMainThreadActions()
-        {
-            lock (m_ActionLock) m_MainThreadActions.Clear();
+            m_MainThreadActions.Enqueue(new QueuedAction(generation, action));
         }
 
         private void RetireConnection()

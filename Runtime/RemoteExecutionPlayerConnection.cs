@@ -77,8 +77,7 @@ namespace RemoteExecution
                 {
                     ClientId = m_Configuration.ClientId,
                     Target = m_Configuration.Target,
-                    UnityVersion = m_Configuration.UnityVersion,
-                    RuntimeVersion = "Unity Remote Execution"
+                    UnityVersion = m_Configuration.UnityVersion
                 };
                 await SendFrameAsync(new RemoteFrame(RemoteMessageKind.Hello,
                     helloRequestId, RemoteExecutionProtocol.EncodeHello(hello)),
