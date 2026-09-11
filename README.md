@@ -60,7 +60,7 @@ public sealed class RemoteExecutionControls : MonoBehaviour
 
 `Start` validates the transport, client ID, timeouts, and optional transfer limits synchronously. The host/port overload and a missing custom transport use the bundled TCP transport. Calling it again with the same parameters while active does nothing; calling it after a fault retries, and calling it with different parameters replaces the current connection. There is no automatic reconnect, so the business layer controls retry timing and UI. `Stop` is safe to call repeatedly.
 
-The Player API is unavailable in Editor Play Mode. Start the Editor listener from **Window > Remote Execution**, then call `RemoteExecutionPlayerApi.Start` from a built Player. No `RemoteExecutionComponent` or settings asset is required.
+The Player API supports built Players and Editor Play Mode. Enter Play Mode, start the listener from **Window > Remote Execution**, then call `RemoteExecutionPlayerApi.Start`. The same Editor can act as both server and Player client through `127.0.0.1`. With Domain Reload enabled, entering Play Mode stops any listener started earlier, so start it after entering Play Mode. Ordinary Edit Mode does not create a runtime client. Exiting Play Mode or reloading scripts disconnects the client and removes its driver object. Editor clients report the desktop platform of the Editor host as their target. No `RemoteExecutionComponent` or settings asset is required.
 
 
 ### Optional runtime connection UI
@@ -82,6 +82,8 @@ public sealed class RemoteExecutionControls : MonoBehaviour
     }
 }
 ```
+
+To embed the controls in an existing `GUILayout` container, such as a game debugger tab, call `DrawContents()` and let the caller supply the container and title. `OnGUI()` draws the complete panel in `Area`.
 
 The helper exposes TCP host, port, client ID, `ShowUI`, and `Area` properties. Its Connect/Retry and Stop/Disconnect buttons call `RemoteExecutionPlayerApi.Start` and `Stop`, and it displays the current state and fault details. The caller controls when the helper is created, shown, enabled, and destroyed; it never stops the global connection implicitly.
 
@@ -322,4 +324,4 @@ A failure with no payload and no content type preserves its remote error code. R
 
 ## Regression tests
 
-Install a Unity Test Framework version compatible with your Editor, refresh assets, and run `RemoteExecution.Tests.Editor` in EditMode. With HybridCLR installed, also run `RemoteExecution.HybridCLR.Tests.Editor` for bundle encoding and decoding. When installed as a Git package, add `com.xw.remote-execution` to the project manifest `testables` array to enable package tests. Tests use isolated in-memory channels without starting real connections or modifying scenes.
+Install a Unity Test Framework version compatible with your Editor, refresh assets, and run `RemoteExecution.Tests.Editor` in EditMode. With HybridCLR installed, also run `RemoteExecution.HybridCLR.Tests.Editor` for bundle encoding and decoding. When installed as a Git package, add `com.xw.remote-execution` to the project manifest `testables` array to enable package tests. Protocol regressions use isolated in-memory channels. The Editor Player integration test enters Play Mode, uses a temporary loopback TCP listener to verify commands and connection cleanup, then returns to Edit Mode.

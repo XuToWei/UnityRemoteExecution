@@ -60,7 +60,7 @@ public sealed class RemoteExecutionControls : MonoBehaviour
 
 `Start` 会同步校验 transport、客户端 ID、超时和可选传输限制。使用 host/port overload 或未提供自定义 transport 时，包会使用默认 TCP。连接期间使用相同参数重复调用不会产生新连接；故障后再次调用会重试，传入不同参数则替换当前连接。包不会自动重连，重试时机和 UI 完全由业务层控制。`Stop` 可以安全地重复调用。
 
-Player API 不支持 Editor Play Mode。先在 **Window > Remote Execution** 中启动 Editor 监听服务，再由构建后的 Player 调用 `RemoteExecutionPlayerApi.Start`。不需要添加 `RemoteExecutionComponent` 或创建配置资产。
+Player API 支持构建后的 Player 和 Editor Play Mode。先进入 Play Mode，再在 **Window > Remote Execution** 中启动监听并调用 `RemoteExecutionPlayerApi.Start`；同一个 Editor 可通过 `127.0.0.1` 同时作为服务端和 Player 客户端。启用 Domain Reload 时，进入 Play Mode 会停止此前启动的 Editor 监听，需要在进入后重新启动监听。普通 Edit Mode 不创建运行时客户端。退出 Play Mode 或脚本重载前会断开客户端并清理驱动对象；Editor 客户端按本机桌面平台上报 target。无需添加 `RemoteExecutionComponent` 或创建配置资产。
 
 
 ### 可选运行时连接 UI
@@ -82,6 +82,8 @@ public sealed class RemoteExecutionControls : MonoBehaviour
     }
 }
 ```
+
+嵌入现有的 `GUILayout` 容器（例如游戏调试器的 Tool 页签）时，调用 `DrawContents()` 绘制连接控件，由调用方提供容器和标题。`OnGUI()` 则按 `Area` 绘制完整面板。
 
 helper 提供 TCP host、port、client ID、`ShowUI` 和 `Area` 属性。Connect/Retry、Stop/Disconnect 按钮会调用 `RemoteExecutionPlayerApi.Start` 和 `Stop`，并显示当前状态和故障信息。helper 的创建、显示、启用和销毁都由调用方控制；它不会隐式停止全局连接。
 
@@ -319,4 +321,4 @@ Player 的命令超时独立于主线程更新；同步命令也应定期检查�
 
 ## 回归测试
 
-安装与 Unity 版本匹配的 Unity Test Framework，刷新资源后在 EditMode 运行 `RemoteExecution.Tests.Editor`。安装 HybridCLR 后，还可运行 `RemoteExecution.HybridCLR.Tests.Editor` 验证 bundle 编解码。以 Git 包安装时，将 `com.xw.remote-execution` 加入工程 `Packages/manifest.json` 的 `testables` 列表以启用包测试。测试使用隔离的内存通道，不启动真实连接或修改场景。
+安装与 Unity 版本匹配的 Unity Test Framework，刷新资源后在 EditMode 运行 `RemoteExecution.Tests.Editor`。安装 HybridCLR 后，还可运行 `RemoteExecution.HybridCLR.Tests.Editor` 验证 bundle 编解码。以 Git 包安装时，将 `com.xw.remote-execution` 加入工程 `Packages/manifest.json` 的 `testables` 列表以启用包测试。协议回归使用隔离的内存通道；Editor Player 集成测试会进入 Play Mode，使用临时本机 TCP 监听验证命令和连接清理，然后返回 Edit Mode。

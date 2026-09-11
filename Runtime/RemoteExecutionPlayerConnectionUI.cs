@@ -93,37 +93,41 @@ namespace RemoteExecution
         public void OnGUI()
         {
             if (!m_ShowUI) return;
-            RemoteExecutionConnectionState state = RemoteExecutionPlayerApi.ConnectionState;
             GUILayout.BeginArea(m_Area, "Remote Execution", GUI.skin.window);
-            try
-            {
-                GUILayout.Label($"State: {state}");
-                if (state == RemoteExecutionConnectionState.Disconnected ||
-                    state == RemoteExecutionConnectionState.Faulted)
-                {
-                    if (m_OptionsProvider == null)
-                    {
-                        GUILayout.Label("Editor Host");
-                        m_EditorHost = GUILayout.TextField(m_EditorHost ?? string.Empty);
-                        GUILayout.Label("Editor Port");
-                        string port = GUILayout.TextField(m_EditorPort.ToString());
-                        if (int.TryParse(port, out int parsedPort)) m_EditorPort = parsedPort;
-                        GUILayout.Label("Client ID");
-                        m_ClientId = GUILayout.TextField(m_ClientId ?? string.Empty);
-                    }
-                    if (GUILayout.Button(state == RemoteExecutionConnectionState.Faulted
-                        ? "Retry" : "Connect")) Connect();
-                }
-                else if (GUILayout.Button(state == RemoteExecutionConnectionState.Connected
-                    ? "Disconnect" : "Stop")) Disconnect();
-
-                RemoteExecutionConnectionError error = RemoteExecutionPlayerApi.LastError;
-                if (state == RemoteExecutionConnectionState.Faulted && error != null)
-                    GUILayout.Label($"[{error.Code}] {error.Message}");
-                if (!string.IsNullOrEmpty(m_LocalError))
-                    GUILayout.Label(m_LocalError);
-            }
+            try { DrawContents(); }
             finally { GUILayout.EndArea(); }
+        }
+
+        /// <summary>Draws the connection controls inside the caller's existing GUILayout container.</summary>
+        public void DrawContents()
+        {
+            if (!m_ShowUI) return;
+            RemoteExecutionConnectionState state = RemoteExecutionPlayerApi.ConnectionState;
+            GUILayout.Label($"State: {state}");
+            if (state == RemoteExecutionConnectionState.Disconnected ||
+                state == RemoteExecutionConnectionState.Faulted)
+            {
+                if (m_OptionsProvider == null)
+                {
+                    GUILayout.Label("Editor Host");
+                    m_EditorHost = GUILayout.TextField(m_EditorHost ?? string.Empty);
+                    GUILayout.Label("Editor Port");
+                    string port = GUILayout.TextField(m_EditorPort.ToString());
+                    if (int.TryParse(port, out int parsedPort)) m_EditorPort = parsedPort;
+                    GUILayout.Label("Client ID");
+                    m_ClientId = GUILayout.TextField(m_ClientId ?? string.Empty);
+                }
+                if (GUILayout.Button(state == RemoteExecutionConnectionState.Faulted
+                    ? "Retry" : "Connect")) Connect();
+            }
+            else if (GUILayout.Button(state == RemoteExecutionConnectionState.Connected
+                ? "Disconnect" : "Stop")) Disconnect();
+
+            RemoteExecutionConnectionError error = RemoteExecutionPlayerApi.LastError;
+            if (state == RemoteExecutionConnectionState.Faulted && error != null)
+                GUILayout.Label($"[{error.Code}] {error.Message}");
+            if (!string.IsNullOrEmpty(m_LocalError))
+                GUILayout.Label(m_LocalError);
         }
 
         private RemoteExecutionPlayerOptions CreateOptions()

@@ -112,9 +112,6 @@ namespace RemoteExecution
 
         private static RemoteCommandCatalog DiscoverCommands()
         {
-#if UNITY_EDITOR
-            return RemoteCommandCatalog.Discover(Array.Empty<Type>());
-#else
             var commandTypes = new List<Type>();
             foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
@@ -124,7 +121,6 @@ namespace RemoteExecution
                 }
             }
             return RemoteCommandCatalog.Discover(commandTypes);
-#endif
         }
 
         private void BeginCommandInput(long generation, RemoteFrame frame)

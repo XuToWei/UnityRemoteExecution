@@ -97,10 +97,9 @@ namespace RemoteExecution
         {
             EnsureMainThread();
             if (options == null) throw new ArgumentNullException(nameof(options));
-#if UNITY_EDITOR
-            throw new PlatformNotSupportedException(
-                "The Remote Execution Player client is not available in the Unity Editor.");
-#else
+            if (!Application.isPlaying)
+                throw new InvalidOperationException(
+                    "Start the game in Play Mode before connecting the Remote Execution Player.");
             RemoteExecutionPlayerConfiguration configuration = CreateConfiguration(options);
             RemoteExecutionPlayerDriver driver;
             lock (s_Lock) driver = s_Driver;
@@ -120,18 +119,27 @@ namespace RemoteExecution
                 lock (s_Lock) s_Driver = driver;
             }
             driver.StartConnection(configuration);
-#endif
         }
 
         public static void Stop()
         {
             EnsureMainThread();
-#if !UNITY_EDITOR
             RemoteExecutionPlayerDriver driver;
             lock (s_Lock) driver = s_Driver;
             if (driver != null) driver.StopConnection();
-#endif
         }
+
+#if UNITY_EDITOR
+        internal static void ShutdownEditorPlayer()
+        {
+            EnsureMainThread();
+            RemoteExecutionPlayerDriver driver;
+            lock (s_Lock) driver = s_Driver;
+            if (driver == null) return;
+            driver.Shutdown();
+            UnityEngine.Object.DestroyImmediate(driver.gameObject);
+        }
+#endif
 
         internal static void SetState(RemoteExecutionPlayerDriver driver, long generation,
             RemoteExecutionConnectionState state, RemoteExecutionConnectionError error)

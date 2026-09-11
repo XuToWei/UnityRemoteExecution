@@ -133,10 +133,15 @@ namespace RemoteExecution
             }
         }
 
-        private void OnApplicationQuit()
+        internal void Shutdown()
         {
             m_Destroying = true;
             StopConnection();
+        }
+
+        private void OnApplicationQuit()
+        {
+            Shutdown();
         }
 
         private void OnDestroy()

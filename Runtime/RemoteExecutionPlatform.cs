@@ -12,9 +12,12 @@ namespace RemoteExecution
                 case RuntimePlatform.Android: return "Android";
                 case RuntimePlatform.IPhonePlayer: return "iOS";
                 case RuntimePlatform.WindowsPlayer:
+                case RuntimePlatform.WindowsEditor:
                     return IntPtr.Size == 8 ? "StandaloneWindows64" : "StandaloneWindows";
-                case RuntimePlatform.OSXPlayer: return "StandaloneOSX";
-                case RuntimePlatform.LinuxPlayer: return "StandaloneLinux64";
+                case RuntimePlatform.OSXPlayer:
+                case RuntimePlatform.OSXEditor: return "StandaloneOSX";
+                case RuntimePlatform.LinuxPlayer:
+                case RuntimePlatform.LinuxEditor: return "StandaloneLinux64";
                 default: return Application.platform.ToString();
             }
         }
