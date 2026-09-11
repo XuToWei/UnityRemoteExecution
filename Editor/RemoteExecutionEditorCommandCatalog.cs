@@ -23,13 +23,7 @@ namespace RemoteExecution
             lock (s_Lock) s_Catalog = null;
         }
 
-        internal static string GetTypeName<TCommand>()
-            where TCommand : class, IRemoteCommand
-        {
-            return GetTypeName(typeof(TCommand));
-        }
-
-        internal static string GetRequestContentType<TCommand>()
+        internal static RemoteCommandDescriptor GetCommand<TCommand>()
             where TCommand : class, IRemoteCommand
         {
             RemoteCommandCatalog catalog;
@@ -39,16 +33,7 @@ namespace RemoteExecution
             if (!catalog.TryGet(typeof(TCommand), out RemoteCommandDescriptor descriptor))
                 throw new InvalidOperationException(
                     $"Remote command type was not discovered: {RemoteCommandCatalog.GetTypeIdentity(typeof(TCommand))}");
-            return descriptor.RequestContentType;
+            return descriptor;
         }
-
-        internal static string GetTypeName(Type commandType)
-        {
-            string typeName = commandType?.FullName;
-            if (string.IsNullOrWhiteSpace(typeName))
-                throw new InvalidOperationException("Remote command type must have a full name.");
-            return typeName;
-        }
-
     }
 }

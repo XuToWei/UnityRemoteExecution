@@ -69,8 +69,6 @@ namespace RemoteExecution.HybridCLR
             if (string.IsNullOrWhiteSpace(request.Source)) throw new InvalidOperationException("Custom source code is required.");
             if (Encoding.UTF8.GetByteCount(request.Source) > MaxSourceBytes)
                 throw new InvalidOperationException($"Custom source code exceeds {MaxSourceBytes} bytes.");
-            if (!Enum.TryParse(request.Target, true, out BuildTarget _))
-                throw new InvalidOperationException($"Unsupported Player target '{request.Target}'.");
         }
 
         private static BuildTarget ParseTarget(string target)

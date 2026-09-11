@@ -1,0 +1,11 @@
+{
+  "name": "RemoteExecution.Tests.Editor",
+  "rootNamespace": "RemoteExecution.Tests",
+  "references": [
+    "RemoteExecution.Runtime",
+    "RemoteExecution.Editor"
+  ],
+  "includePlatforms": ["Editor"],
+  "autoReferenced": false,
+  "optionalUnityReferences": ["TestAssemblies"]
+}

@@ -242,11 +242,9 @@ namespace RemoteExecution
             CancellationToken cancellationToken = default)
             where TCommand : class, IRemoteCommand
         {
-            string typeName = RemoteExecutionEditorCommandCatalog.GetTypeName<TCommand>();
-            string contentType = RemoteExecutionEditorCommandCatalog
-                .GetRequestContentType<TCommand>();
-            return ExecuteCommandAsync(sessionId, typeName, payload,
-                contentType, cancellationToken);
+            RemoteCommandDescriptor command = RemoteExecutionEditorCommandCatalog.GetCommand<TCommand>();
+            return ExecuteCommandAsync(sessionId, command.TypeName, payload,
+                command.RequestContentType, cancellationToken);
         }
 
         public static Task<RemoteExecutionResult> ExecuteCommandAsync(

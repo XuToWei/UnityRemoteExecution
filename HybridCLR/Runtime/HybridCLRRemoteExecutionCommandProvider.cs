@@ -53,11 +53,11 @@ namespace RemoteExecution.HybridCLR
                 {
                     return RemoteCommandResult.Failure("INVALID_BUNDLE", exception.Message);
                 }
-                if (!string.Equals(bundle.Target, GetRuntimeTarget(),
+                if (!string.Equals(bundle.Target, RemoteExecutionPlatform.GetPlayerTarget(),
                     StringComparison.OrdinalIgnoreCase))
                     return RemoteCommandResult.Failure(
                         "TARGET_MISMATCH",
-                        $"Bundle target '{bundle.Target}' does not match Player target '{GetRuntimeTarget()}'.");
+                        $"Bundle target '{bundle.Target}' does not match Player target '{RemoteExecutionPlatform.GetPlayerTarget()}'.");
 
                 if (!TryPrepareEntry(bundle, cancellationToken,
                     out IHybridCLRRemoteExecutionEntry entry,
@@ -264,29 +264,5 @@ namespace RemoteExecution.HybridCLR
             using (var sha = SHA256.Create()) return sha.ComputeHash(bytes);
         }
 
-        private static string GetRuntimeTarget()
-        {
-#if UNITY_ANDROID && !UNITY_EDITOR
-            return "Android";
-#elif UNITY_IOS && !UNITY_EDITOR
-            return "iOS";
-#elif UNITY_STANDALONE_WIN && !UNITY_EDITOR
-            return "StandaloneWindows64";
-#elif UNITY_STANDALONE_OSX && !UNITY_EDITOR
-            return "StandaloneOSX";
-#elif UNITY_STANDALONE_LINUX && !UNITY_EDITOR
-            return "StandaloneLinux64";
-#else
-            return Application.platform.ToString();
-#endif
-        }
-    }
-
-    internal static class HybridCLRRemoteExecutionStartup
-    {
-        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
-        private static void Initialize()
-        {
-        }
     }
 }

@@ -33,7 +33,7 @@ namespace RemoteExecution
 
         internal void Start()
         {
-            _ = RunAsync();
+            RunAsync().Forget();
         }
 
         internal void Stop()

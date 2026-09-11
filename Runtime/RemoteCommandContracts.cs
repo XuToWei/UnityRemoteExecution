@@ -23,7 +23,7 @@ namespace RemoteExecution
     {
         internal RemoteCommandDescriptor(Type commandType, IRemoteCommand command)
         {
-            CommandType = commandType ?? throw new ArgumentNullException(nameof(commandType));
+            if (commandType == null) throw new ArgumentNullException(nameof(commandType));
             Command = command ?? throw new ArgumentNullException(nameof(command));
             TypeName = commandType.FullName ?? throw new InvalidOperationException(
                 "Remote command type must have a full name.");
@@ -33,9 +33,9 @@ namespace RemoteExecution
             TimeoutSeconds = command.TimeoutSeconds;
             RequestContentType = command.RequestContentType ?? string.Empty;
             ResponseContentType = command.ResponseContentType ?? string.Empty;
+            RemoteExecutionProtocol.ValidateCommandInfo(ToInfo());
         }
 
-        internal Type CommandType { get; }
         internal IRemoteCommand Command { get; }
         internal string TypeName { get; }
         internal string Name { get; }
@@ -44,7 +44,21 @@ namespace RemoteExecution
         internal int TimeoutSeconds { get; }
         internal string RequestContentType { get; }
         internal string ResponseContentType { get; }
-        internal bool IsExecutable => Command != null;
+
+        internal RemoteCommandInfo ToInfo()
+        {
+            return new RemoteCommandInfo
+            {
+                TypeName = TypeName,
+                Name = Name,
+                Description = Description,
+                Category = Category,
+                TimeoutSeconds = TimeoutSeconds,
+                RequestContentType = RequestContentType,
+                ResponseContentType = ResponseContentType,
+                Executable = true
+            };
+        }
     }
 
     public sealed class RemoteCommandContext

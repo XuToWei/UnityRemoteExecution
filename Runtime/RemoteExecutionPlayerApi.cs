@@ -208,7 +208,7 @@ namespace RemoteExecution
             return new RemoteExecutionPlayerConfiguration(transport, configurationKey,
                 resolvedClientId, options.MaxCommandRequestBytes,
                 options.MaxCommandResponseBytes, options.ConnectTimeout,
-                options.HandshakeTimeout, Application.unityVersion, GetRuntimeTarget());
+                options.HandshakeTimeout, Application.unityVersion, RemoteExecutionPlatform.GetPlayerTarget());
         }
 
         private static void ValidateTimeout(TimeSpan timeout, string parameterName)
@@ -260,22 +260,6 @@ namespace RemoteExecution
             }
         }
 
-        private static string GetRuntimeTarget()
-        {
-#if UNITY_ANDROID && !UNITY_EDITOR
-            return "Android";
-#elif UNITY_IOS && !UNITY_EDITOR
-            return "iOS";
-#elif UNITY_STANDALONE_WIN && !UNITY_EDITOR
-            return "StandaloneWindows64";
-#elif UNITY_STANDALONE_OSX && !UNITY_EDITOR
-            return "StandaloneOSX";
-#elif UNITY_STANDALONE_LINUX && !UNITY_EDITOR
-            return "StandaloneLinux64";
-#else
-            return Application.platform.ToString();
-#endif
-        }
     }
 
     internal sealed class RemoteExecutionPlayerConfiguration :

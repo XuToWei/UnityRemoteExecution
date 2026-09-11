@@ -138,7 +138,6 @@ namespace RemoteExecution
                 try { queued.Action(); }
                 catch (Exception exception) { Debug.LogException(exception); }
             }
-            m_CommandHost?.UpdateTimeout();
         }
 
         private void OnApplicationQuit()

@@ -183,11 +183,8 @@ public sealed class TableReloadCommand : IRemoteCommand
 RemoteExecutionClientInfo player = RemoteExecutionEditorApi.GetClients()[0];
 byte[] tableBytes = BuildTableBytes();
 
-RemoteExecutionResult result = await RemoteExecutionEditorApi.ExecuteCommandAsync(
-    player.Id,
-    "table.reload",
-    tableBytes,
-    "application/octet-stream");
+RemoteExecutionResult result = await RemoteExecutionEditorApi.ExecuteCommandAsync<TableReloadCommand>(
+    player.Id, tableBytes);
 
 if (!result.Succeeded)
     UnityEngine.Debug.LogError($"[{result.Code}] {result.Message}");
@@ -196,12 +193,11 @@ if (!result.Succeeded)
 对于无输入 command，Editor 代码可以直接以窗口 **命令** 页签当前选中的 Player 为目标，并等待其返回结果：
 
 ```csharp
-RemoteExecutionResult result = await RemoteExecutionEditorApi.ExecuteCommandAsync(
-    "game.refresh");
+RemoteExecutionResult result = await RemoteExecutionEditorApi.ExecuteCommandAsync<RefreshGameCommand>();
 byte[] response = result.Payload;
 ```
 
-该 overload 会发送空 payload 和空 content type。Remote Execution 窗口需要保持打开并已选中一个 Player。command 需要输入，或调用方需要明确选择 Player 时，应继续使用带 `sessionId` 的 overload。
+该调用会发送空 payload，并使用 `RefreshGameCommand` 声明的请求 content type。Remote Execution 窗口需要保持打开并已选中一个 Player。command 需要输入，或调用方需要明确选择 Player 时，应继续使用带 `sessionId` 的 overload。
 
 `RefreshCommandsAsync(sessionId)` 会等待最新目录真正写入缓存后再完成。`GetClients()` 返回包含 Player target、显式 `IsReady` 状态和命令 metadata 的只读快照。`ClientId` 是 Player 自行声明的展示信息，不是安全身份。命令目录继续作为 Editor panel 与 Player 间的能力协商 API；核心窗口不再提供通用命令执行器。
 
@@ -232,8 +228,8 @@ public sealed class TableRemoteExecutionPanel : IRemoteExecutionEditorPanel
         byte[] bytes = BuildTableBytes();
         context.TryStartOperation("正在重载表格……", async cancellationToken =>
         {
-            RemoteExecutionResult result = await RemoteExecutionEditorApi.ExecuteCommandAsync(
-                sessionId, "table.reload", bytes, "application/octet-stream", cancellationToken);
+            RemoteExecutionResult result = await RemoteExecutionEditorApi.ExecuteCommandAsync<TableReloadCommand>(
+                sessionId, bytes, cancellationToken);
             if (!result.Succeeded)
                 throw new System.InvalidOperationException($"[{result.Code}] {result.Message}");
             return "表格重载完成。";
@@ -248,7 +244,7 @@ Panel 必须是提供无参构造的 concrete 普通 C# 类，稳定 `Id` 必须
 
 ## 可选 HybridCLR 适配器
 
-安装 `com.code-philosophy.hybridclr` 后，包内 `versionDefines` 会自动启用条件适配器。它会在 **Window > Remote Execution** 内增加 **HybridCLR** 工具，并在 Player 注册 `hybridclr.apply-bundle`。
+安装 `com.code-philosophy.hybridclr` 后，包内 `versionDefines` 会自动启用条件适配器。它会在 **Window > Remote Execution** 内增加 **HybridCLR** 工具，并在 Player 注册 `RemoteExecution.HybridCLR.HybridCLRRemoteExecutionCommand`。
 
 Remote Execution 窗口是唯一 Editor 入口：**基础**页签管理连接配置和 Player 概览；**命令**页签统一管理 Player/工具选择、每个 Player 的任务状态、结果和取消。命令页的二级工具切换栏包含 HybridCLR 与其他业务 panel，不再创建独立窗口。每个面向用户的远程操作由自身的 `IRemoteExecutionEditorPanel` 提供界面。
 
@@ -285,7 +281,7 @@ public sealed class RemoteExecutionEntry : IHybridCLRRemoteExecutionEntry
 
 该 panel 不会编译或发送项目中的热更新程序集。动态源码引用的程序集必须已在 Player 中加载。
 
-HybridCLR 加载不是核心协议特性。Editor 把自有的版本化 HybridCLR envelope 通过普通通用命令输入帧发送。Player 在加载前完整校验 envelope 和每个 artifact 的 hash。Bundle 必须包含且仅包含一个 public concrete `IHybridCLRRemoteExecutionEntry` 实现，并提供 public 无参构造函数。加载后，适配器会在固定的 `hybridclr.apply-bundle` 请求内调用 `Task ExecuteAsync(CancellationToken)`；动态入口不会发布到命令目录。项目仍需自行完成正常的 HybridCLR AOT metadata 配置。
+HybridCLR 加载不是核心协议特性。Editor 把自有的版本化 HybridCLR envelope 通过普通通用命令输入帧发送。Player 在加载前完整校验 envelope 和每个 artifact 的 hash。Bundle 必须包含且仅包含一个 public concrete `IHybridCLRRemoteExecutionEntry` 实现，并提供 public 无参构造函数。加载后，适配器会在固定的 `RemoteExecution.HybridCLR.HybridCLRRemoteExecutionCommand` 请求内调用 `Task ExecuteAsync(CancellationToken)`；动态入口不会发布到命令目录。项目仍需自行完成正常的 HybridCLR AOT metadata 配置。
 
 完整 envelope（含 metadata）最大 128 MiB，并会完整缓冲在内存中。程序集不能从 Player AppDomain 卸载。同名程序集 hash 变化，或加载、解析入口过程中发生失败，都必须重启 Player。部分加载无法回滚；适配器会拒绝后续 apply，避免继续扩大不一致状态。
 
@@ -314,3 +310,13 @@ HybridCLR 加载不是核心协议特性。Editor 把自有的版本化 HybridCL
 协议版本 3 使用 `URX3` frame magic，以及无认证的 `Hello(requestId) → Ready(same requestId)` 握手；`Ready` payload 必须为空。命令目录使用具体 command 类型的 `FullName`，请求/响应大小是全局限制而不是单个 command 的限制。消息编号保持显式固定：`Hello=1`、`Ready=2`、`Error=3`、`Ping=4`、`Pong=5`、`ListCommands=6`、`Commands=7`、command input begin/chunk/end 为 `8..10`、command result metadata/chunk/end 为 `11..13`、`CancelCommand=14`。
 
 版本 3 包含命令目录发现、通用 command request/result、取消、错误和 ping/pong。HybridCLR 的 `HCB1` envelope 版本 2 与核心协议相互独立。
+
+## 超时与取消
+
+Player 的命令超时独立于主线程更新；同步命令也应定期检查取消令牌。Editor 在命令取得执行名额后开始计时，发送请求和等待结果共用命令超时加 5 秒宽限的预算；目录刷新共用 10 秒预算。正在发送帧时取消或超时会中止当前连接，以免后续请求接续到不完整帧。业务层可按需重新连接。排队等待时取消不会中止前一个操作的连接。
+
+无载荷且未声明 content type 的失败结果会保留远端错误码；带载荷的结果仍须符合命令声明的响应类型。字符串调用传入命令类型的完整名称，也可以优先使用上面的泛型调用；`RefreshGameCommand` 代表业务自行实现的无输入命令。
+
+## 回归测试
+
+安装与 Unity 版本匹配的 Unity Test Framework，刷新资源后在 EditMode 运行 `RemoteExecution.Tests.Editor`。以 Git 包安装时，将 `com.xw.remote-execution` 加入工程 `Packages/manifest.json` 的 `testables` 列表以启用包测试。测试使用隔离的内存通道，不启动真实连接或修改场景。

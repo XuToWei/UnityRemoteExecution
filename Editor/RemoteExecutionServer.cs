@@ -265,8 +265,6 @@ namespace RemoteExecution
 
         private sealed class ClientSession : IDisposable
         {
-            private const int MaxRetainedAssemblyBytes =
-                RemoteExecutionProtocol.DefaultMaxCommandResponseBytes;
             private readonly IRemoteExecutionChannel m_Channel;
             private readonly TimeSpan m_HandshakeTimeout;
             private readonly object m_StateLock = new object();
@@ -279,9 +277,11 @@ namespace RemoteExecution
             private readonly object m_PendingLock = new object();
             private readonly object m_CatalogStateLock = new object();
             private readonly object m_ResponseLock = new object();
-            private MemoryStream m_ResponseBuffer = new MemoryStream();
+            private readonly RemotePayloadReceiver m_ResponseReceiver = new RemotePayloadReceiver(
+                RemoteExecutionProtocol.MaxCommandResponseBytes,
+                RemoteExecutionProtocol.DefaultMaxCommandResponseBytes);
             private bool m_IsReady;
-            private bool m_Disposed;
+            private volatile bool m_Disposed;
             private string m_Status = "Connecting";
             private string m_ClientId = "Unknown";
             private string m_Target = string.Empty;
@@ -340,7 +340,7 @@ namespace RemoteExecution
                             m_ClientId = data.ClientId;
                             m_Target = data.Target;
                         }
-                        await SendAsync(new RemoteFrame(RemoteMessageKind.Ready,
+                        await SendControlFrameAsync(new RemoteFrame(RemoteMessageKind.Ready,
                             hello.RequestId, Array.Empty<byte>()), linked.Token)
                             .ConfigureAwait(false);
                         lock (m_StateLock)
@@ -408,92 +408,77 @@ namespace RemoteExecution
                         if (!command.Executable)
                             throw new InvalidOperationException("Remote command is unavailable.");
                         if (payload.Length > RemoteExecutionProtocol.MaxCommandRequestBytes)
-                            throw new InvalidDataException(
-                                "Command payload exceeds the advertised limit.");
+                            throw new InvalidDataException("Command payload exceeds the advertised limit.");
                         if (!ContentTypeMatches(command.RequestContentType, contentType))
-                            throw new InvalidDataException(
-                                "Command payload content type does not match the command.");
+                            throw new InvalidDataException("Command payload content type does not match the command.");
 
-                        Guid requestId = Guid.NewGuid();
-                        var pending = new PendingOperation(command.ResponseContentType);
-                        AddPending(requestId, pending);
-                        try
+                        using (var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(
+                            command.TimeoutSeconds + CommandResponseGraceSeconds)))
+                        using (var operation = CancellationTokenSource.CreateLinkedTokenSource(
+                            linked.Token, deadline.Token))
                         {
-                            byte[] hash = ComputeHash(payload);
-                            linked.Token.ThrowIfCancellationRequested();
-                            await SendAsync(
-                                new RemoteFrame(RemoteMessageKind.CommandInputBegin, requestId,
-                                    RemoteExecutionProtocol.EncodeCommandInputBegin(command.TypeName,
-                                        contentType, payload.LongLength, hash)),
-                                m_Cancellation.Token).ConfigureAwait(false);
-                            for (int offset = 0; offset < payload.Length;
-                                offset += RemoteExecutionProtocol.MaxChunkBytes)
+                            Guid requestId = Guid.NewGuid();
+                            var pending = new PendingOperation(command.ResponseContentType);
+                            AddPending(requestId, pending);
+                            try
                             {
-                                linked.Token.ThrowIfCancellationRequested();
-                                int count = Math.Min(RemoteExecutionProtocol.MaxChunkBytes,
-                                    payload.Length - offset);
+                                byte[] hash = ComputeHash(payload);
                                 await SendAsync(
-                                    new RemoteFrame(RemoteMessageKind.CommandInputChunk, requestId,
-                                        RemoteExecutionProtocol.EncodeCommandChunk(offset, payload,
-                                            offset, count)),
-                                    m_Cancellation.Token).ConfigureAwait(false);
+                                    new RemoteFrame(RemoteMessageKind.CommandInputBegin, requestId,
+                                        RemoteExecutionProtocol.EncodeCommandInputBegin(command.TypeName,
+                                            contentType, payload.LongLength, hash)),
+                                    operation.Token).ConfigureAwait(false);
+                                for (int offset = 0; offset < payload.Length;
+                                    offset += RemoteExecutionProtocol.MaxChunkBytes)
+                                {
+                                    int count = Math.Min(RemoteExecutionProtocol.MaxChunkBytes,
+                                        payload.Length - offset);
+                                    await SendAsync(
+                                        new RemoteFrame(RemoteMessageKind.CommandInputChunk, requestId,
+                                            RemoteExecutionProtocol.EncodeCommandChunk(offset, payload,
+                                                offset, count)),
+                                        operation.Token).ConfigureAwait(false);
+                                }
+                                await SendAsync(
+                                    new RemoteFrame(RemoteMessageKind.CommandInputEnd, requestId,
+                                        RemoteExecutionProtocol.EncodeCommandEnd()),
+                                    operation.Token).ConfigureAwait(false);
+                                return await WaitForResponseAsync(
+                                    pending.CommandCompletion.Task, operation.Token).ConfigureAwait(false);
                             }
-                            linked.Token.ThrowIfCancellationRequested();
-                            await SendAsync(
-                                new RemoteFrame(RemoteMessageKind.CommandInputEnd, requestId,
-                                    RemoteExecutionProtocol.EncodeCommandEnd()),
-                                m_Cancellation.Token).ConfigureAwait(false);
-                            return await WaitForCommandAsync(requestId, pending,
-                                command.TimeoutSeconds, linked.Token, cancellationToken)
-                                .ConfigureAwait(false);
-                        }
-                        catch (OperationCanceledException)
-                        {
-                            RemovePending(requestId);
-                            SendCancelCommand(requestId);
-                            throw;
-                        }
-                        catch (TimeoutException)
-                        {
-                            RemovePending(requestId);
-                            SendCancelCommand(requestId);
-                            throw;
-                        }
-                        catch
-                        {
-                            RemovePending(requestId);
-                            throw;
+                            catch (OperationCanceledException)
+                            {
+                                SendCancelCommand(requestId);
+                                cancellationToken.ThrowIfCancellationRequested();
+                                if (deadline.IsCancellationRequested)
+                                    throw new TimeoutException(
+                                        $"Timed out sending the command or waiting for its response ({command.TimeoutSeconds} seconds plus response grace).");
+                                throw;
+                            }
+                            finally { RemovePending(requestId); }
                         }
                     }
                     finally { m_OperationLock.Release(); }
                 }
             }
 
-            private async Task<RemoteExecutionResult> WaitForCommandAsync(Guid requestId,
-                PendingOperation pending, int timeoutSeconds, CancellationToken linkedToken,
-                CancellationToken callerToken)
+            private static async Task<T> WaitForResponseAsync<T>(Task<T> response,
+                CancellationToken cancellationToken)
             {
-                Task timeout = Task.Delay(TimeSpan.FromSeconds(
-                    timeoutSeconds + CommandResponseGraceSeconds), CancellationToken.None);
-                Task cancelled = Task.Delay(Timeout.Infinite, linkedToken);
-                Task completed = await Task.WhenAny(pending.CommandCompletion.Task, timeout,
-                    cancelled).ConfigureAwait(false);
-                if (pending.CommandCompletion.Task.IsCompleted)
-                    return await pending.CommandCompletion.Task.ConfigureAwait(false);
-                if (completed == cancelled)
+                var cancelled = new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                using (cancellationToken.Register(() => cancelled.TrySetResult(true)))
                 {
-                    if (callerToken.IsCancellationRequested)
-                        throw new OperationCanceledException(callerToken);
-                    linkedToken.ThrowIfCancellationRequested();
+                    await Task.WhenAny(response, cancelled.Task).ConfigureAwait(false);
+                    if (!response.IsCompleted) cancellationToken.ThrowIfCancellationRequested();
+                    return await response.ConfigureAwait(false);
                 }
-                throw new TimeoutException(
-                    $"Timed out after {timeoutSeconds} seconds waiting for the Player command response.");
             }
 
             private void SendCancelCommand(Guid requestId)
             {
                 if (m_Disposed || m_Cancellation.IsCancellationRequested) return;
-                SendAsync(
+                SendControlFrameAsync(
                     new RemoteFrame(RemoteMessageKind.CancelCommand, requestId,
                         Array.Empty<byte>()),
                     m_Cancellation.Token).Forget();
@@ -501,29 +486,28 @@ namespace RemoteExecution
 
             private async Task RequestCommandsAsync(CancellationToken cancellationToken)
             {
-                Guid requestId = Guid.NewGuid();
-                var pending = new PendingOperation();
-                AddPending(requestId, pending);
-                try
+                using (var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
+                using (var operation = CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken, deadline.Token))
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    await SendAsync(
-                        new RemoteFrame(RemoteMessageKind.ListCommands, requestId,
-                            Array.Empty<byte>()),
-                        m_Cancellation.Token).ConfigureAwait(false);
-                    Task timeout = Task.Delay(TimeSpan.FromSeconds(10), CancellationToken.None);
-                    Task cancelled = Task.Delay(Timeout.Infinite, cancellationToken);
-                    Task completed = await Task.WhenAny(pending.CatalogCompletion.Task, timeout,
-                        cancelled).ConfigureAwait(false);
-                    if (pending.CatalogCompletion.Task.IsCompleted)
+                    Guid requestId = Guid.NewGuid();
+                    var pending = new PendingOperation();
+                    AddPending(requestId, pending);
+                    try
                     {
-                        UpdateCommands(await pending.CatalogCompletion.Task.ConfigureAwait(false));
-                        return;
+                        await SendAsync(
+                            new RemoteFrame(RemoteMessageKind.ListCommands, requestId,
+                                Array.Empty<byte>()),
+                            operation.Token).ConfigureAwait(false);
+                        UpdateCommands(await WaitForResponseAsync(
+                            pending.CatalogCompletion.Task, operation.Token).ConfigureAwait(false));
                     }
-                    if (completed == cancelled) cancellationToken.ThrowIfCancellationRequested();
-                    throw new TimeoutException("Timed out waiting for the Player command catalog.");
+                    catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+                    {
+                        throw new TimeoutException("Timed out requesting the Player command catalog.");
+                    }
+                    finally { RemovePending(requestId); }
                 }
-                finally { RemovePending(requestId); }
             }
 
             private void RequestCommandsInBackground()
@@ -563,7 +547,7 @@ namespace RemoteExecution
                     throw new InvalidDataException("Unexpected handshake frame.");
                 if (frame.Kind == RemoteMessageKind.Ping)
                 {
-                    SendAsync(
+                    SendControlFrameAsync(
                         new RemoteFrame(RemoteMessageKind.Pong, frame.RequestId,
                             Array.Empty<byte>()),
                         m_Cancellation.Token).Forget();
@@ -636,67 +620,48 @@ namespace RemoteExecution
             private void HandleCommandResult(Guid requestId,
                 PendingOperation pending, byte[] payload)
             {
-                if (!pending.IsCommand || pending.ResultPayload != null)
-                    throw new InvalidDataException(
-                        "Unexpected or duplicate command result metadata.");
+                if (!pending.IsCommand || pending.ResultStarted)
+                    throw new InvalidDataException("Unexpected or duplicate command result metadata.");
                 RemoteExecutionProtocol.DecodeCommandResult(payload, out bool succeeded,
                     out string code, out string message, out string contentType,
                     out long length, out byte[] hash);
-                if (length > RemoteExecutionProtocol.MaxCommandResponseBytes)
-                    throw new InvalidDataException("Command result exceeds the advertised limit.");
-                if (!ContentTypeMatches(pending.ExpectedContentType, contentType))
+                if ((succeeded || length > 0 || !string.IsNullOrEmpty(contentType)) &&
+                    !ContentTypeMatches(pending.ExpectedContentType, contentType))
                     throw new InvalidDataException(
                         "Command result content type does not match the command.");
+                pending.ResultStarted = true;
                 pending.ResultSucceeded = succeeded;
                 pending.ResultCode = code;
                 pending.ResultMessage = message;
                 pending.ResultContentType = contentType;
-                pending.ExpectedLength = length;
-                pending.ExpectedHash = hash;
                 if (length > 0)
                 {
-                    lock (m_ResponseLock)
-                    {
-                        ResetResponseBuffer();
-                        if (m_ResponseBuffer.Capacity < length)
-                            m_ResponseBuffer.Capacity = checked((int)length);
-                        pending.ResultPayload = m_ResponseBuffer;
-                    }
+                    m_ResponseReceiver.Begin(length, hash);
                 }
-                if (length == 0)
+                else
                 {
                     RemovePending(requestId);
-                    pending.CommandCompletion.TrySetResult(new RemoteExecutionResult(succeeded,
-                        code, message, Array.Empty<byte>(), contentType));
+                    pending.CommandCompletion.TrySetResult(new RemoteExecutionResult(
+                        succeeded, code, message, Array.Empty<byte>(), contentType));
                 }
             }
 
-            private static void HandleCommandResultChunk(PendingOperation pending, byte[] payload)
+            private void HandleCommandResultChunk(PendingOperation pending, byte[] payload)
             {
-                if (!pending.IsCommand || pending.ResultPayload == null)
+                if (!pending.IsCommand || !pending.ResultStarted)
                     throw new InvalidDataException("Command result metadata is missing.");
                 RemoteExecutionProtocol.DecodeCommandResultChunk(payload, out long offset,
                     out byte[] data);
-                if (pending.ResultPayload.Position != offset ||
-                    pending.ResultPayload.Length + data.Length > pending.ExpectedLength)
-                    throw new InvalidDataException(
-                        "Command result chunk is out of order or too large.");
-                pending.ResultPayload.Write(data, 0, data.Length);
+                m_ResponseReceiver.Append(offset, data);
             }
 
             private void HandleCommandResultEnd(Guid requestId,
                 PendingOperation pending, byte[] payload)
             {
                 RemoteExecutionProtocol.DecodeCommandResultEnd(payload);
-                if (!pending.IsCommand || pending.ResultPayload == null ||
-                    pending.ExpectedLength == 0 ||
-                    pending.ResultPayload.Length != pending.ExpectedLength)
-                    throw new InvalidDataException(
-                        "Command result length does not match metadata.");
-                byte[] result = pending.ResultPayload.ToArray();
-                if (!RemoteExecutionProtocol.FixedTimeEquals(ComputeHash(result),
-                    pending.ExpectedHash))
-                    throw new InvalidDataException("Command result hash does not match metadata.");
+                if (!pending.IsCommand || !pending.ResultStarted)
+                    throw new InvalidDataException("Command result metadata is missing.");
+                byte[] result = m_ResponseReceiver.Complete();
                 RemovePending(requestId);
                 pending.CommandCompletion.TrySetResult(new RemoteExecutionResult(
                     pending.ResultSucceeded, pending.ResultCode, pending.ResultMessage,
@@ -726,31 +691,15 @@ namespace RemoteExecution
 
             private void RemovePending(Guid requestId)
             {
-                PendingOperation pending = null;
                 lock (m_ResponseLock)
                 {
+                    PendingOperation pending;
                     lock (m_PendingLock)
                     {
-                        if (m_Pending.TryGetValue(requestId, out pending))
-                            m_Pending.Remove(requestId);
+                        if (!m_Pending.TryGetValue(requestId, out pending)) return;
+                        m_Pending.Remove(requestId);
                     }
-                    if (pending != null && ReferenceEquals(pending.ResultPayload, m_ResponseBuffer))
-                        ResetResponseBuffer();
-                }
-                pending?.Dispose();
-            }
-
-            private void ResetResponseBuffer()
-            {
-                if (m_ResponseBuffer.Capacity > MaxRetainedAssemblyBytes)
-                {
-                    m_ResponseBuffer.Dispose();
-                    m_ResponseBuffer = new MemoryStream();
-                }
-                else
-                {
-                    m_ResponseBuffer.SetLength(0);
-                    m_ResponseBuffer.Position = 0;
+                    if (pending.ResultStarted) m_ResponseReceiver.Reset();
                 }
             }
 
@@ -768,12 +717,7 @@ namespace RemoteExecution
             private async Task<RemoteFrame> ReadInitialHelloAsync(
                 CancellationToken cancellationToken)
             {
-                Task<RemoteFrame> read;
-                try { read = m_Channel.ReceiveAsync(cancellationToken); }
-                catch
-                {
-                    throw;
-                }
+                Task<RemoteFrame> read = m_Channel.ReceiveAsync(cancellationToken);
                 if (read == null)
                     throw new InvalidOperationException(
                         "The transport channel returned no receive task.");
@@ -796,6 +740,15 @@ namespace RemoteExecution
                 throw new TimeoutException("Timed out waiting for the Player Hello.");
             }
 
+            private async Task SendControlFrameAsync(RemoteFrame frame,
+                CancellationToken cancellationToken)
+            {
+                using (var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
+                using (var operation = CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken, deadline.Token))
+                    await SendAsync(frame, operation.Token).ConfigureAwait(false);
+            }
+
             private async Task SendAsync(RemoteFrame frame,
                 CancellationToken cancellationToken)
             {
@@ -803,11 +756,32 @@ namespace RemoteExecution
                 await m_SendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
                 try
                 {
-                    Task send = m_Channel.SendAsync(frame, cancellationToken);
-                    if (send == null)
-                        throw new InvalidOperationException(
-                            "The transport channel returned no send task.");
-                    await send.ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    // A cancelled write may leave half a frame on the wire.
+                    using (cancellationToken.Register(() =>
+                    {
+                        try { m_Channel.Abort(); }
+                        catch (Exception) { }
+                    }))
+                    {
+                        try
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            Task send = m_Channel.SendAsync(frame, cancellationToken);
+                            if (send == null)
+                                throw new InvalidOperationException(
+                                    "The transport channel returned no send task.");
+                            await send.ConfigureAwait(false);
+                            cancellationToken.ThrowIfCancellationRequested();
+                        }
+                        catch
+                        {
+                            bool cancelled = cancellationToken.IsCancellationRequested;
+                            Dispose();
+                            if (cancelled) throw new OperationCanceledException(cancellationToken);
+                            throw;
+                        }
+                    }
                 }
                 finally { m_SendLock.Release(); }
             }
@@ -822,7 +796,7 @@ namespace RemoteExecution
                         pending = m_Pending.Values.ToArray();
                         m_Pending.Clear();
                     }
-                    ResetResponseBuffer();
+                    m_ResponseReceiver.Reset();
                 }
                 foreach (PendingOperation item in pending)
                 {
@@ -830,16 +804,15 @@ namespace RemoteExecution
                         item.CommandCompletion.TrySetException(exception);
                     else
                         item.CatalogCompletion.TrySetException(exception);
-                    item.Dispose();
                 }
             }
 
             public void Dispose()
             {
-                if (m_Disposed) return;
-                m_Disposed = true;
                 lock (m_StateLock)
                 {
+                    if (m_Disposed) return;
+                    m_Disposed = true;
                     m_IsReady = false;
                     if (!m_Status.StartsWith("Error", StringComparison.Ordinal))
                         m_Status = "Disconnected";
@@ -850,11 +823,7 @@ namespace RemoteExecution
                 try { m_Channel.Dispose(); }
                 catch (Exception) { }
                 FailPending(new IOException("Remote execution client disconnected."));
-                lock (m_ResponseLock)
-                {
-                    m_ResponseBuffer.Dispose();
-                    m_ResponseBuffer = new MemoryStream();
-                }
+                lock (m_ResponseLock) m_ResponseReceiver.Dispose();
             }
 
             private sealed class PendingOperation
@@ -872,7 +841,6 @@ namespace RemoteExecution
                     : this()
                 {
                     IsCommand = true;
-                    MaxResponseBytes = RemoteExecutionProtocol.MaxCommandResponseBytes;
                     ExpectedContentType = expectedContentType ?? string.Empty;
                 }
 
@@ -884,20 +852,8 @@ namespace RemoteExecution
                 internal string ResultCode;
                 internal string ResultMessage;
                 internal string ResultContentType;
-                internal long ExpectedLength;
-                internal byte[] ExpectedHash;
-                internal MemoryStream ResultPayload;
-
-                internal void Dispose()
-                {
-                    ResultPayload = null;
-                }
+                internal bool ResultStarted;
             }
         }
-    }
-
-    internal static class RemoteExecutionEditorTaskExtensions
-    {
-        internal static void Forget(this Task task) { _ = task; }
     }
 }

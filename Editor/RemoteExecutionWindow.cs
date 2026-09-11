@@ -234,8 +234,7 @@ namespace RemoteExecution
                         }
                         catch (Exception exception)
                         {
-                            SetWindowStatus(
-                                $"Random port selection failed: {exception.Message}");
+                            m_WindowStatus = $"Random port selection failed: {exception.Message}";
                         }
                     }
                 }
@@ -253,7 +252,7 @@ namespace RemoteExecution
                         }
                         catch (Exception exception)
                         {
-                            SetWindowStatus($"Server start failed: {exception.Message}");
+                            m_WindowStatus = $"Server start failed: {exception.Message}";
                         }
                     }
                 }
@@ -409,10 +408,6 @@ namespace RemoteExecution
             return m_Operations.TryGetValue(sessionId, out OperationState state) ? state : null;
         }
 
-        private void SetWindowStatus(string status)
-        {
-            m_WindowStatus = status;
-        }
 
         private void CancelAllOperations()
         {

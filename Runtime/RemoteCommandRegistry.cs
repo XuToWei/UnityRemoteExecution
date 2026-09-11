@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
@@ -12,7 +11,6 @@ namespace RemoteExecution
 {
     internal sealed class RemoteCommandCatalog
     {
-        private static readonly UTF8Encoding s_Utf8 = new UTF8Encoding(false, true);
         private readonly Dictionary<string, RemoteCommandDescriptor> m_ByType;
 
         private RemoteCommandCatalog(IReadOnlyList<RemoteCommandDescriptor> descriptors)
@@ -40,7 +38,6 @@ namespace RemoteExecution
                     var command = (IRemoteCommand)Activator.CreateInstance(type);
                     if (command == null)
                         throw new InvalidOperationException("Command constructor returned no instance.");
-                    ValidateCommand(type, command);
                     descriptors.Add(new RemoteCommandDescriptor(type, command));
                 }
                 catch (Exception exception)
@@ -86,8 +83,6 @@ namespace RemoteExecution
             RemoteCommandContext context, CancellationToken cancellationToken)
         {
             if (descriptor == null) throw new ArgumentNullException(nameof(descriptor));
-            if (!descriptor.IsExecutable)
-                throw new InvalidOperationException("Remote command is not executable.");
             if (context == null) throw new ArgumentNullException(nameof(context));
             cancellationToken.ThrowIfCancellationRequested();
             if (context.CancellationToken != cancellationToken)
@@ -108,17 +103,7 @@ namespace RemoteExecution
 
         internal RemoteCommandInfo[] EncodeInfos()
         {
-            return Descriptors.Select(descriptor => new RemoteCommandInfo
-            {
-                TypeName = descriptor.TypeName,
-                Name = descriptor.Name,
-                Description = descriptor.Description,
-                Category = descriptor.Category,
-                TimeoutSeconds = descriptor.TimeoutSeconds,
-                RequestContentType = descriptor.RequestContentType,
-                ResponseContentType = descriptor.ResponseContentType,
-                Executable = descriptor.IsExecutable
-            }).ToArray();
+            return Descriptors.Select(descriptor => descriptor.ToInfo()).ToArray();
         }
 
         internal static IEnumerable<Type> GetLoadableTypes(Assembly assembly)
@@ -137,30 +122,5 @@ namespace RemoteExecution
             return type?.AssemblyQualifiedName ?? type?.FullName ?? type?.Name ?? "<unknown>";
         }
 
-        private static void ValidateCommand(Type type, IRemoteCommand command)
-        {
-            if (type.FullName == null || type.FullName.Length > RemoteExecutionProtocol.MaxStringBytes)
-                throw new InvalidDataException("Remote command type name is invalid.");
-            ValidateString(command.Name, "name", false);
-            ValidateString(command.Description, "description", false);
-            ValidateString(command.Category, "category", true);
-            ValidateString(command.RequestContentType, "request content type", true);
-            ValidateString(command.ResponseContentType, "response content type", true);
-            if (command.TimeoutSeconds < 1 || command.TimeoutSeconds > 3600)
-                throw new InvalidDataException("Invalid command timeout.");
-        }
-
-        private static void ValidateString(string value, string name, bool allowEmpty)
-        {
-            if ((!allowEmpty && string.IsNullOrWhiteSpace(value)) ||
-                GetUtf8ByteCount(value) > RemoteExecutionProtocol.MaxStringBytes)
-                throw new InvalidDataException($"Invalid command {name}.");
-        }
-
-        private static int GetUtf8ByteCount(string value)
-        {
-            try { return s_Utf8.GetByteCount(value ?? string.Empty); }
-            catch (EncoderFallbackException) { return int.MaxValue; }
-        }
     }
 }

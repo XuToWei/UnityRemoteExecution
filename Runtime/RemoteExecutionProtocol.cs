@@ -449,9 +449,10 @@ namespace RemoteExecution
             return frame;
         }
 
-        private static void ValidateCommandInfo(RemoteCommandInfo command)
+        internal static void ValidateCommandInfo(RemoteCommandInfo command)
         {
             if (command == null || string.IsNullOrWhiteSpace(command.TypeName) ||
+                string.IsNullOrWhiteSpace(command.Name) || string.IsNullOrWhiteSpace(command.Description) ||
                 !IsValidString(command.TypeName) || !IsValidString(command.Name) ||
                 !IsValidString(command.Description) || !IsValidString(command.Category) ||
                 !IsValidString(command.RequestContentType) ||
@@ -518,9 +519,7 @@ namespace RemoteExecution
             }
         }
 
-        private static ushort ReadUInt16(byte[] buffer, int offset) => (ushort)(buffer[offset] | buffer[offset + 1] << 8);
         private static uint ReadUInt32(byte[] buffer, int offset) => (uint)(buffer[offset] | buffer[offset + 1] << 8 | buffer[offset + 2] << 16 | buffer[offset + 3] << 24);
-        private static void WriteUInt16(byte[] buffer, int offset, ushort value) { buffer[offset] = (byte)value; buffer[offset + 1] = (byte)(value >> 8); }
         private static void WriteUInt32(byte[] buffer, int offset, uint value) { buffer[offset] = (byte)value; buffer[offset + 1] = (byte)(value >> 8); buffer[offset + 2] = (byte)(value >> 16); buffer[offset + 3] = (byte)(value >> 24); }
     }
 }

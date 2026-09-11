@@ -96,10 +96,8 @@ public sealed class RemoteExecutionEntry : IHybridCLRRemoteExecutionEntry
         {
             await RemoteExecutionEditorApi.RefreshCommandsAsync(sessionId, cancellationToken);
             RemoteExecutionClientInfo client = FindReadyClient(sessionId);
-            RemoteCommandSnapshot applyCommand = client.Commands.FirstOrDefault(command =>
-                string.Equals(command.TypeName, HybridCLRBundleCodec.TypeName,
-                    StringComparison.Ordinal));
-            ValidateApplyCommand(applyCommand);
+            string capabilityProblem = GetCapabilityProblem(client);
+            if (capabilityProblem != null) throw new InvalidOperationException(capabilityProblem);
 
             await s_BuildLock.WaitAsync(cancellationToken);
             HybridCLRRemoteBuildOutput output;
@@ -133,17 +131,5 @@ public sealed class RemoteExecutionEntry : IHybridCLRRemoteExecutionEntry
                    ?? throw new InvalidOperationException("Player is no longer connected.");
         }
 
-        private static void ValidateApplyCommand(RemoteCommandSnapshot command)
-        {
-            if (command == null)
-                throw new InvalidOperationException(
-                    "The selected Player does not expose the HybridCLR command.");
-            if (!command.Executable)
-                throw new InvalidOperationException("The HybridCLR command is unavailable.");
-            if (!string.Equals(command.RequestContentType, HybridCLRBundleCodec.ContentType,
-                StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException(
-                    "The HybridCLR command uses an incompatible content type.");
-        }
     }
 }

@@ -183,11 +183,8 @@ Business Editor tools can query connected Players and execute commands without a
 RemoteExecutionClientInfo player = RemoteExecutionEditorApi.GetClients()[0];
 byte[] tableBytes = BuildTableBytes();
 
-RemoteExecutionResult result = await RemoteExecutionEditorApi.ExecuteCommandAsync(
-    player.Id,
-    "table.reload",
-    tableBytes,
-    "application/octet-stream");
+RemoteExecutionResult result = await RemoteExecutionEditorApi.ExecuteCommandAsync<TableReloadCommand>(
+    player.Id, tableBytes);
 
 if (!result.Succeeded)
     UnityEngine.Debug.LogError($"[{result.Code}] {result.Message}");
@@ -196,12 +193,11 @@ if (!result.Succeeded)
 For an input-free command, Editor code can target the Player currently selected on the window's **Commands** tab and await its result directly:
 
 ```csharp
-RemoteExecutionResult result = await RemoteExecutionEditorApi.ExecuteCommandAsync(
-    "game.refresh");
+RemoteExecutionResult result = await RemoteExecutionEditorApi.ExecuteCommandAsync<RefreshGameCommand>();
 byte[] response = result.Payload;
 ```
 
-This overload sends an empty payload with an empty content type. The Remote Execution window must remain open with a Player selected. Use the `sessionId` overload when the command needs input or the caller must choose the Player explicitly.
+This call sends an empty payload with the request content type declared by `RefreshGameCommand`. The Remote Execution window must remain open with a Player selected. Use the `sessionId` overload when the command needs input or the caller must choose the Player explicitly.
 
 Call `RefreshCommandsAsync(sessionId)` to await a fresh command catalog. `GetClients()` returns read-only snapshots containing the Player target, explicit `IsReady` state, and current command metadata. `ClientId` is self-reported display metadata and is not a security identity. The command catalog remains a capability-negotiation API for Editor panels; the core window does not provide a generic command executor.
 
@@ -235,8 +231,8 @@ public sealed class TableRemoteExecutionPanel : IRemoteExecutionEditorPanel
         byte[] bytes = BuildTableBytes();
         context.TryStartOperation("Reloading tables...", async cancellationToken =>
         {
-            RemoteExecutionResult result = await RemoteExecutionEditorApi.ExecuteCommandAsync(
-                sessionId, "table.reload", bytes, "application/octet-stream", cancellationToken);
+            RemoteExecutionResult result = await RemoteExecutionEditorApi.ExecuteCommandAsync<TableReloadCommand>(
+                sessionId, bytes, cancellationToken);
             if (!result.Succeeded)
                 throw new System.InvalidOperationException($"[{result.Code}] {result.Message}");
             return "Tables reloaded.";
@@ -251,7 +247,7 @@ The cancellation-aware `RefreshCommandsAsync` and `ExecuteCommandAsync` overload
 
 ## Optional HybridCLR adapter
 
-When `com.code-philosophy.hybridclr` is installed, the package's `versionDefines` activates the conditional adapter automatically. It adds a **HybridCLR** tool inside **Window > Remote Execution** and the Player command `hybridclr.apply-bundle`.
+When `com.code-philosophy.hybridclr` is installed, the package's `versionDefines` activates the conditional adapter automatically. It adds a **HybridCLR** tool inside **Window > Remote Execution** and the Player command `RemoteExecution.HybridCLR.HybridCLRRemoteExecutionCommand`.
 
 The Remote Execution window is the only Editor entry point. Its **Basic** tab owns connection settings and the connected-Player overview. Its **Commands** tab owns Player/tool selection, per-Player operation state, status, and cancellation; the secondary tool switcher contains HybridCLR and other contributed panels rather than separate windows. Every user-facing remote action supplies its own `IRemoteExecutionEditorPanel`.
 
@@ -288,7 +284,7 @@ The entry must be a public concrete class with a public parameterless constructo
 
 The panel does not compile or send project hot-update assemblies. Any assemblies referenced by the dynamic source must already be loaded in the Player.
 
-HybridCLR loading is not a core protocol feature. The Editor serializes a versioned HybridCLR-owned envelope and sends it through ordinary generic command input frames. The Player adapter validates the entire envelope and its per-artifact hashes before loading. A bundle must contain exactly one public concrete `IHybridCLRRemoteExecutionEntry` implementation with a public parameterless constructor. After loading, the adapter invokes `Task ExecuteAsync(CancellationToken)` inside the fixed `hybridclr.apply-bundle` request. The dynamic entry is not published in the command catalog. Projects remain responsible for their normal HybridCLR AOT metadata configuration.
+HybridCLR loading is not a core protocol feature. The Editor serializes a versioned HybridCLR-owned envelope and sends it through ordinary generic command input frames. The Player adapter validates the entire envelope and its per-artifact hashes before loading. A bundle must contain exactly one public concrete `IHybridCLRRemoteExecutionEntry` implementation with a public parameterless constructor. After loading, the adapter invokes `Task ExecuteAsync(CancellationToken)` inside the fixed `RemoteExecution.HybridCLR.HybridCLRRemoteExecutionCommand` request. The dynamic entry is not published in the command catalog. Projects remain responsible for their normal HybridCLR AOT metadata configuration.
 
 The complete envelope, including metadata, is limited to 128 MiB and is buffered in memory. Assemblies cannot be unloaded from the Player AppDomain. Reapplying the same name with a different hash, or a failure while loading or resolving the entry, requires restarting the Player. A partial load cannot be rolled back; the adapter rejects later apply attempts to avoid expanding an inconsistent state.
 
@@ -317,3 +313,13 @@ Without HybridCLR, the adapter command and HybridCLR panel are absent. The Comma
 Protocol version 3 uses the `URX3` frame magic and an unauthenticated `Hello(requestId) → Ready(same requestId)` handshake; `Ready` must have an empty payload. Command catalog entries use the concrete command type's `FullName`; request/response size limits are global rather than per command. Message numbers remain explicit: `Hello=1`, `Ready=2`, `Error=3`, `Ping=4`, `Pong=5`, `ListCommands=6`, `Commands=7`, command input begin/chunk/end `=8..10`, command result metadata/chunk/end `=11..13`, and `CancelCommand=14`.
 
 Version 3 contains command-catalog discovery, generic command request/result transfer, cancellation, errors, and ping/pong. The HybridCLR `HCB1` envelope version 2 is independent from the core protocol.
+
+## Timeouts and cancellation
+
+Player command deadlines run independently of main-thread updates; synchronous commands must still check their cancellation token. Once an Editor command acquires its execution slot, sending the request and awaiting its result share the command timeout plus a five-second grace period. Catalog refresh has a ten-second budget including sending. Cancelling or timing out during a frame write aborts the connection so later requests cannot continue an incomplete frame. The application can reconnect as needed. Cancelling a queued operation does not abort the active connection.
+
+A failure with no payload and no content type preserves its remote error code. Results carrying a payload must still match the declared response content type. String calls take the full command type name; prefer the generic calls shown above. `RefreshGameCommand` represents an application-defined command with no input.
+
+## Regression tests
+
+Install a Unity Test Framework version compatible with your Editor, refresh assets, and run `RemoteExecution.Tests.Editor` in EditMode. When installed as a Git package, add `com.xw.remote-execution` to the project manifest `testables` array to enable package tests. Tests use isolated in-memory channels without starting real connections or modifying scenes.
