@@ -798,7 +798,7 @@ namespace RemoteExecution
                         pending = m_Pending.Values.ToArray();
                         m_Pending.Clear();
                     }
-                    m_ResponseReceiver.Reset();
+                    if (!m_Disposed) m_ResponseReceiver.Reset();
                 }
                 foreach (PendingOperation item in pending)
                 {

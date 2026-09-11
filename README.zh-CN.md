@@ -60,7 +60,7 @@ public sealed class RemoteExecutionControls : MonoBehaviour
 
 `Start` 会同步校验 transport、客户端 ID、超时和可选传输限制。使用 host/port overload 或未提供自定义 transport 时，包会使用默认 TCP。连接期间使用相同参数重复调用不会产生新连接；故障后再次调用会重试，传入不同参数则替换当前连接。包不会自动重连，重试时机和 UI 完全由业务层控制。`Stop` 可以安全地重复调用。
 
-Player API 支持构建后的 Player 和 Editor Play Mode。先进入 Play Mode，再在 **Window > Remote Execution** 中启动监听并调用 `RemoteExecutionPlayerApi.Start`；同一个 Editor 可通过 `127.0.0.1` 同时作为服务端和 Player 客户端。启用 Domain Reload 时，进入 Play Mode 会停止此前启动的 Editor 监听，需要在进入后重新启动监听。普通 Edit Mode 不创建运行时客户端。退出 Play Mode 或脚本重载前会断开客户端并清理驱动对象；Editor 客户端按本机桌面平台上报 target。无需添加 `RemoteExecutionComponent` 或创建配置资产。
+Player API 支持构建后的 Player 和 Editor Play Mode。先进入 Play Mode，再在 **Window > Remote Execution** 中启动监听并调用 `RemoteExecutionPlayerApi.Start`；同一个 Editor 可通过 `127.0.0.1` 同时作为服务端和 Player 客户端。启用 Domain Reload 时，进入 Play Mode 会停止此前启动的 Editor 监听，需要在进入后重新启动监听。普通 Edit Mode 不创建运行时客户端。退出 Play Mode 或脚本重载前会断开客户端并清理驱动对象；Editor 客户端保留 `WindowsEditor`、`OSXEditor` 或 `LinuxEditor` target，以区分编辑器运行环境与构建后的 Player。无需添加 `RemoteExecutionComponent` 或创建配置资产。
 
 
 ### 可选运行时连接 UI
@@ -282,6 +282,8 @@ public sealed class RemoteExecutionEntry : IHybridCLRRemoteExecutionEntry
 入口必须是 public concrete class，提供 public 无参构造函数，并且一个 bundle 中只能存在一个 `IHybridCLRRemoteExecutionEntry` 实现。`ExecuteAsync` 的异常会作为 `ENTRY_EXECUTION_FAILED` 返回 Editor；取消会沿用远程命令的取消或超时结果。
 
 该 panel 不会编译或发送项目中的热更新程序集。动态源码引用的程序集必须已在 Player 中加载。
+
+Editor Play Mode 可直接编译执行默认入口，无需将 `RemoteExecution.Dynamic` 加入 HybridCLR 热更新程序集名单；编译器会根据 Editor target 选择对应桌面编译平台。构建后的 Player 仍须在 HybridCLR 构建配置中声明该程序集。默认源码只输出 `Remote execution entry completed.` 日志，不会修改场景。
 
 HybridCLR 加载不是核心协议特性。Editor 把自有的 HybridCLR envelope 通过普通通用命令输入帧发送。Player 在加载前完整校验 envelope 和每个 artifact 的 hash。Bundle 必须包含且仅包含一个 public concrete `IHybridCLRRemoteExecutionEntry` 实现，并提供 public 无参构造函数。加载后，适配器会在固定的 `RemoteExecution.HybridCLR.HybridCLRRemoteExecutionCommand` 请求内调用 `Task ExecuteAsync(CancellationToken)`；动态入口不会发布到命令目录。项目仍需自行完成正常的 HybridCLR AOT metadata 配置。
 

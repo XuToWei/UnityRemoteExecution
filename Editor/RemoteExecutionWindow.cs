@@ -19,9 +19,11 @@ namespace RemoteExecution
         private int m_Port = 38421;
         [SerializeField] private string m_SelectedPanelId;
         [SerializeField] private WindowSection m_SelectedSection = WindowSection.Basic;
+        [SerializeField] private float m_OperationDetailsHeight = 180f;
         private int m_SelectedSessionId;
         private Vector2 m_BasicScroll;
         private Vector2 m_CommandsScroll;
+        private GUIStyle m_OperationDetailsStyle;
         private readonly List<PanelEntry> m_Panels = new List<PanelEntry>();
         private readonly Dictionary<int, OperationState> m_Operations =
             new Dictionary<int, OperationState>();
@@ -425,19 +427,89 @@ namespace RemoteExecution
             if (player == null || operation == null ||
                 string.IsNullOrEmpty(operation.Status)) return;
             EditorGUILayout.Space(6);
-            using (new EditorGUILayout.HorizontalScope(EditorStyles.helpBox))
+            float maxHeight = Mathf.Max(60f, position.height - 260f);
+            float detailsHeight = Mathf.Clamp(m_OperationDetailsHeight, 60f, maxHeight);
+            if (operation.DetailsExpanded)
+                DrawOperationSplitter(detailsHeight, maxHeight);
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
-                EditorGUILayout.LabelField(operation.Status);
-                if (operation.IsRunning)
+                using (new EditorGUILayout.HorizontalScope())
                 {
-                    using (new EditorGUI.DisabledScope(operation.IsCancelling))
+                    int lineEnd = operation.Status.IndexOfAny(new[] { '\r', '\n' });
+                    string summary = lineEnd < 0 ? operation.Status : operation.Status.Substring(0, lineEnd);
+                    var content = new GUIContent(summary, operation.HasFailed
+                        ? EditorGUIUtility.IconContent("console.erroricon.sml").image : null,
+                        operation.Status);
+                    operation.DetailsExpanded = EditorGUI.Foldout(
+                        EditorGUILayout.GetControlRect(), operation.DetailsExpanded, content, true);
+                    if (GUILayout.Button(new GUIContent("Copy", "Copy the complete execution result."),
+                        GUILayout.Width(52)))
+                        EditorGUIUtility.systemCopyBuffer = operation.Status;
+                    if (operation.IsRunning)
                     {
-                        if (GUILayout.Button(operation.IsCancelling ? "Cancelling..." : "Cancel",
-                            GUILayout.Width(100)))
-                            operation.Cancel();
+                        using (new EditorGUI.DisabledScope(operation.IsCancelling))
+                        {
+                            if (GUILayout.Button(operation.IsCancelling ? "Cancelling..." : "Cancel",
+                                GUILayout.Width(100)))
+                                operation.Cancel();
+                        }
                     }
                 }
+                if (operation.DetailsExpanded)
+                    DrawOperationDetails(operation, detailsHeight);
             }
+        }
+
+        private void DrawOperationSplitter(float height, float maxHeight)
+        {
+            Rect rect = GUILayoutUtility.GetRect(0f, 6f, GUILayout.ExpandWidth(true));
+            int controlId = GUIUtility.GetControlID(FocusType.Passive);
+            EditorGUIUtility.AddCursorRect(rect, MouseCursor.ResizeVertical, controlId);
+            EditorGUI.DrawRect(new Rect(rect.center.x - 20f, rect.center.y, 40f, 1f), Color.gray);
+            Event current = Event.current;
+            switch (current.GetTypeForControl(controlId))
+            {
+                case EventType.MouseDown:
+                    if (current.button == 0 && rect.Contains(current.mousePosition))
+                    {
+                        GUIUtility.hotControl = controlId;
+                        current.Use();
+                    }
+                    break;
+                case EventType.MouseDrag:
+                    if (GUIUtility.hotControl == controlId)
+                    {
+                        m_OperationDetailsHeight = Mathf.Clamp(height - current.delta.y, 60f, maxHeight);
+                        Repaint();
+                        current.Use();
+                    }
+                    break;
+                case EventType.MouseUp:
+                    if (GUIUtility.hotControl == controlId)
+                    {
+                        GUIUtility.hotControl = 0;
+                        current.Use();
+                    }
+                    break;
+            }
+        }
+
+        private void DrawOperationDetails(OperationState operation, float height)
+        {
+            if (m_OperationDetailsStyle == null)
+                m_OperationDetailsStyle = new GUIStyle(EditorStyles.wordWrappedLabel)
+                {
+                    richText = false,
+                    padding = new RectOffset(4, 4, 4, 4)
+                };
+            Rect viewport = GUILayoutUtility.GetRect(0f, height, GUILayout.ExpandWidth(true));
+            float width = Mathf.Max(1f, viewport.width - GUI.skin.verticalScrollbar.fixedWidth - 4f);
+            float contentHeight = Mathf.Max(viewport.height,
+                m_OperationDetailsStyle.CalcHeight(new GUIContent(operation.Status), width));
+            var contentRect = new Rect(0f, 0f, width, contentHeight);
+            operation.DetailsScroll = GUI.BeginScrollView(viewport, operation.DetailsScroll, contentRect);
+            EditorGUI.SelectableLabel(contentRect, operation.Status, m_OperationDetailsStyle);
+            GUI.EndScrollView();
         }
 
         private bool TryStartOperation(RemoteExecutionClientInfo player,
@@ -628,6 +700,9 @@ namespace RemoteExecution
             internal bool IsRunning => OperationTask != null && !OperationTask.IsCompleted;
             internal bool IsActive => OperationTask != null && !m_Observed;
             internal bool IsCancelling { get; private set; }
+            internal bool HasFailed => m_Observed && OperationTask.IsFaulted;
+            internal bool DetailsExpanded { get; set; }
+            internal Vector2 DetailsScroll;
 
             internal void Start(Task<string> task)
             {
@@ -650,8 +725,12 @@ namespace RemoteExecution
                 if (OperationTask.IsCanceled)
                     Status = "Operation cancelled.";
                 else if (OperationTask.IsFaulted)
+                {
                     Status = OperationTask.Exception?.GetBaseException().Message ??
                         "Operation failed.";
+                    DetailsExpanded = true;
+                    DetailsScroll = Vector2.zero;
+                }
                 else
                     Status = string.IsNullOrWhiteSpace(OperationTask.Result)
                         ? "Operation completed." : OperationTask.Result;

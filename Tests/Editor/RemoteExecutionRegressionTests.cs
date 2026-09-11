@@ -30,6 +30,18 @@ namespace RemoteExecution.Tests
         public void TearDown() => TestCommand<int>.Deferred?.TrySetCanceled();
 
         [Test]
+        public void LateReadFailureAfterDisposalDoesNotResetTheDisposedReceiver()
+        {
+            using (var session = new SessionHarness(false))
+            {
+                session.Dispose();
+                object client = typeof(SessionHarness).GetField("m_Session", TestReflection.Instance).GetValue(session);
+                Assert.DoesNotThrow(() => TestReflection.Call(client, "FailPending",
+                    new IOException("Read completed after disconnect.")));
+            }
+        }
+
+        [Test]
         public void BinaryRequestAndResponseRoundTripAcrossMultipleChunks()
         {
             var payload = new byte[RemoteExecutionProtocol.MaxChunkBytes * 2 + 7];

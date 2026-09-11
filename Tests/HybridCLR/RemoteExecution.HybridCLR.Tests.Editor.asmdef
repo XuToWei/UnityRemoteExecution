@@ -3,7 +3,9 @@
   "rootNamespace": "RemoteExecution.Tests",
   "references": [
     "RemoteExecution.Runtime",
-    "RemoteExecution.HybridCLR.Runtime"
+    "RemoteExecution.Editor",
+    "RemoteExecution.HybridCLR.Runtime",
+    "HybridCLR.Editor"
   ],
   "includePlatforms": ["Editor"],
   "autoReferenced": false,

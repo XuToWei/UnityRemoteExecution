@@ -48,8 +48,8 @@ namespace RemoteExecution.HybridCLR
             if (request == null) throw new ArgumentNullException(nameof(request));
             cancellationToken.ThrowIfCancellationRequested();
             ValidateInput(request);
-            BuildTarget target = ParseTarget(request.Target);
-            if (!SettingsUtil.HotUpdateAssemblyNamesExcludePreserved.Contains(
+            BuildTarget target = ParseTarget(request.Target, out bool isEditor);
+            if (!isEditor && !SettingsUtil.HotUpdateAssemblyNamesExcludePreserved.Contains(
                     DynamicAssemblyName, StringComparer.Ordinal))
                 throw new InvalidOperationException(
                     $"Configure '{DynamicAssemblyName}' as a HybridCLR hot-update assembly before using custom source.");
@@ -71,8 +71,16 @@ namespace RemoteExecution.HybridCLR
                 throw new InvalidOperationException($"Custom source code exceeds {MaxSourceBytes} bytes.");
         }
 
-        private static BuildTarget ParseTarget(string target)
+        private static BuildTarget ParseTarget(string target, out bool isEditor)
         {
+            isEditor = true;
+            switch (target)
+            {
+                case nameof(UnityEngine.RuntimePlatform.WindowsEditor): return BuildTarget.StandaloneWindows64;
+                case nameof(UnityEngine.RuntimePlatform.OSXEditor): return BuildTarget.StandaloneOSX;
+                case nameof(UnityEngine.RuntimePlatform.LinuxEditor): return BuildTarget.StandaloneLinux64;
+            }
+            isEditor = false;
             if (!Enum.TryParse(target, true, out BuildTarget result))
                 throw new InvalidOperationException($"Unsupported Player target '{target}'.");
             return result;
@@ -95,6 +103,9 @@ namespace RemoteExecution.HybridCLR
                 buildTargetGroup = BuildPipeline.GetBuildTargetGroup(target),
                 additionalReferences = GetPlayerReferences()
             };
+            // Project references supply Unity's modules; the legacy aggregate duplicates their types.
+            builder.excludeReferences = builder.defaultReferences.Where(reference =>
+                string.Equals(Path.GetFileName(reference), "UnityEngine.dll", StringComparison.OrdinalIgnoreCase)).ToArray();
             var completion = new TaskCompletionSource<CompilerMessage[]>(TaskCreationOptions.RunContinuationsAsynchronously);
             builder.buildFinished += (path, messages) => completion.TrySetResult(messages ?? Array.Empty<CompilerMessage>());
             if (!builder.Build()) throw new InvalidOperationException("The dynamic source compiler is already busy.");

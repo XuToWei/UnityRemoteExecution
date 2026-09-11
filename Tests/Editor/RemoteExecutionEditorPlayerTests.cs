@@ -62,8 +62,7 @@ namespace RemoteExecution.Tests
                         "The Editor Player did not publish its command catalog.");
                     RemoteExecutionClientInfo player = RemoteExecutionEditorApi.GetClients()
                         .Single(client => client.ClientId == clientId && client.IsReady);
-                    Assert.That(player.Target, Does.StartWith("Standalone"));
-                    Assert.That(Enum.TryParse(player.Target, out BuildTarget _), Is.True);
+                    Assert.That(player.Target, Is.EqualTo(Application.platform.ToString()));
                     Assert.That(DriverCount(), Is.EqualTo(1));
 
                     byte[] payload = Enumerable.Range(0, RemoteExecutionProtocol.MaxChunkBytes + 7)
