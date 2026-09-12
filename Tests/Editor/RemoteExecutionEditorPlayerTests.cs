@@ -24,6 +24,15 @@ namespace RemoteExecution.Tests
             Assert.That(DriverCount(), Is.Zero);
         }
 
+        [Test]
+        public void DefaultClientIdIsAnEightCharacterHash()
+        {
+            string clientId = (string)typeof(RemoteExecutionPlayerApi)
+                .GetMethod("ResolveClientId", BindingFlags.Static | BindingFlags.NonPublic)
+                .Invoke(null, null);
+            Assert.That(clientId, Does.Match("^[0-9a-f]{8}$"));
+        }
+
         [UnityTest]
         public IEnumerator EditorPlayerConnectsExecutesAndCleansUpAcrossReconnects()
         {
@@ -62,6 +71,8 @@ namespace RemoteExecution.Tests
                         "The Editor Player did not publish its command catalog.");
                     RemoteExecutionClientInfo player = RemoteExecutionEditorApi.GetClients()
                         .Single(client => client.ClientId == clientId && client.IsReady);
+                    Assert.That(player.Commands.Any(command =>
+                        command.TypeName == typeof(SearchPlayerLogsCommand).FullName), Is.True);
                     Assert.That(player.Target, Is.EqualTo(Application.platform.ToString()));
                     Assert.That(DriverCount(), Is.EqualTo(1));
 

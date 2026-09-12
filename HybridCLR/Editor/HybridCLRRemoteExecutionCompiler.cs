@@ -5,7 +5,6 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using HybridCLR.Editor;
 using UnityEditor;
 using UnityEditor.Compilation;
 
@@ -38,7 +37,7 @@ namespace RemoteExecution.HybridCLR
 
     internal static class HybridCLRRemoteExecutionCompiler
     {
-        internal const string DynamicAssemblyName = "RemoteExecution.Dynamic";
+        internal const string DynamicAssemblyNamePrefix = "RemoteExecution.Dynamic.";
         internal const int MaxSourceBytes = 512 * 1024;
         private const int DynamicCompileTimeoutSeconds = 120;
 
@@ -48,17 +47,14 @@ namespace RemoteExecution.HybridCLR
             if (request == null) throw new ArgumentNullException(nameof(request));
             cancellationToken.ThrowIfCancellationRequested();
             ValidateInput(request);
-            BuildTarget target = ParseTarget(request.Target, out bool isEditor);
-            if (!isEditor && !SettingsUtil.HotUpdateAssemblyNamesExcludePreserved.Contains(
-                    DynamicAssemblyName, StringComparer.Ordinal))
-                throw new InvalidOperationException(
-                    $"Configure '{DynamicAssemblyName}' as a HybridCLR hot-update assembly before using custom source.");
+            BuildTarget target = ParseTarget(request.Target);
 
             string outputDirectory = Path.Combine("Temp/RemoteHybridCLR", request.Target,
                 Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(outputDirectory);
+            string assemblyName = DynamicAssemblyNamePrefix + Guid.NewGuid().ToString("N");
             HybridCLRBundleArtifact dynamicArtifact = await CompileDynamicSourceAsync(
-                target, outputDirectory, DynamicAssemblyName, request.Source, cancellationToken);
+                target, outputDirectory, assemblyName, request.Source, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             return new HybridCLRRemoteBuildOutput(request.Target,
                 new[] { dynamicArtifact });
@@ -71,16 +67,14 @@ namespace RemoteExecution.HybridCLR
                 throw new InvalidOperationException($"Custom source code exceeds {MaxSourceBytes} bytes.");
         }
 
-        private static BuildTarget ParseTarget(string target, out bool isEditor)
+        private static BuildTarget ParseTarget(string target)
         {
-            isEditor = true;
             switch (target)
             {
                 case nameof(UnityEngine.RuntimePlatform.WindowsEditor): return BuildTarget.StandaloneWindows64;
                 case nameof(UnityEngine.RuntimePlatform.OSXEditor): return BuildTarget.StandaloneOSX;
                 case nameof(UnityEngine.RuntimePlatform.LinuxEditor): return BuildTarget.StandaloneLinux64;
             }
-            isEditor = false;
             if (!Enum.TryParse(target, true, out BuildTarget result))
                 throw new InvalidOperationException($"Unsupported Player target '{target}'.");
             return result;

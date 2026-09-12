@@ -1,4 +1,5 @@
 using System;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using UnityEngine;
@@ -230,11 +231,19 @@ namespace RemoteExecution
         {
             string value = SystemInfo.deviceUniqueIdentifier;
             if (string.IsNullOrWhiteSpace(value)) value = SystemInfo.deviceName;
-            if (!string.IsNullOrWhiteSpace(value)) return value.Trim();
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                using (var sha = SHA256.Create())
+                {
+                    byte[] hash = sha.ComputeHash(s_Utf8.GetBytes(value.Trim()));
+                    return string.Concat(hash[0].ToString("x2"), hash[1].ToString("x2"),
+                        hash[2].ToString("x2"), hash[3].ToString("x2"));
+                }
+            }
             lock (s_Lock)
             {
                 if (string.IsNullOrEmpty(s_FallbackClientId))
-                    s_FallbackClientId = $"Player-{Guid.NewGuid():N}";
+                    s_FallbackClientId = Guid.NewGuid().ToString("N").Substring(0, 8);
                 return s_FallbackClientId;
             }
         }

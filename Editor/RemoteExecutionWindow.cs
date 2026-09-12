@@ -23,7 +23,6 @@ namespace RemoteExecution
         private int m_SelectedSessionId;
         private Vector2 m_BasicScroll;
         private Vector2 m_CommandsScroll;
-        private GUIStyle m_OperationDetailsStyle;
         private readonly List<PanelEntry> m_Panels = new List<PanelEntry>();
         private readonly Dictionary<int, OperationState> m_Operations =
             new Dictionary<int, OperationState>();
@@ -348,12 +347,7 @@ namespace RemoteExecution
                 for (int i = 0; i < clients.Count; i++)
                     if (clients[i].IsReady) { current = i; break; }
             }
-            string[] labels = clients.Select(client =>
-            {
-                OperationState state = GetOperation(client.Id);
-                string operation = state != null && state.IsActive ? " — Running" : string.Empty;
-                return $"{client.Description} — {client.Status}{operation}";
-            }).ToArray();
+            string[] labels = clients.Select(client => client.Description).ToArray();
             current = EditorGUILayout.Popup(current, labels);
             RemoteExecutionClientInfo selected = clients[Math.Max(0, current)];
             m_SelectedSessionId = selected.Id;
@@ -490,19 +484,13 @@ namespace RemoteExecution
 
         private void DrawOperationDetails(OperationState operation, float height)
         {
-            if (m_OperationDetailsStyle == null)
-                m_OperationDetailsStyle = new GUIStyle(EditorStyles.wordWrappedLabel)
-                {
-                    richText = false,
-                    padding = new RectOffset(4, 4, 4, 4)
-                };
             Rect viewport = GUILayoutUtility.GetRect(0f, height, GUILayout.ExpandWidth(true));
             float width = Mathf.Max(1f, viewport.width - GUI.skin.verticalScrollbar.fixedWidth - 4f);
             float contentHeight = Mathf.Max(viewport.height,
-                m_OperationDetailsStyle.CalcHeight(new GUIContent(operation.Status), width));
+                EditorStyles.textArea.CalcHeight(new GUIContent(operation.Status), width));
             var contentRect = new Rect(0f, 0f, width, contentHeight);
             operation.DetailsScroll = GUI.BeginScrollView(viewport, operation.DetailsScroll, contentRect);
-            EditorGUI.SelectableLabel(contentRect, operation.Status, m_OperationDetailsStyle);
+            EditorGUI.TextArea(contentRect, operation.Status);
             GUI.EndScrollView();
         }
 

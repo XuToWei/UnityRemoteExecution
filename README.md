@@ -58,7 +58,7 @@ public sealed class RemoteExecutionControls : MonoBehaviour
 
 `ConnectionState` reports `Disconnected`, `Connecting`, `Handshaking`, `Connected`, or `Faulted`; `IsConnected` is true only after the Editor acknowledges the protocol handshake. State-change callbacks run on Unity's main thread. `LastError` contains a stable code and message while faulted.
 
-`Start` validates the transport, client ID, timeouts, and optional transfer limits synchronously. The host/port overload and a missing custom transport use the bundled TCP transport. Calling it again with the same parameters while active does nothing; calling it after a fault retries, and calling it with different parameters replaces the current connection. There is no automatic reconnect, so the business layer controls retry timing and UI. `Stop` is safe to call repeatedly.
+`Start` validates the transport, client ID, timeouts, and optional transfer limits synchronously. The host/port overload and a missing custom transport use the bundled TCP transport. When no client ID is provided, the Player reports a stable eight-character device hash. Calling `Start` again with the same parameters while active does nothing; calling it after a fault retries, and calling it with different parameters replaces the current connection. There is no automatic reconnect, so the business layer controls retry timing and UI. `Stop` is safe to call repeatedly.
 
 The Player API supports built Players and Editor Play Mode. Enter Play Mode, start the listener from **Window > Remote Execution**, then call `RemoteExecutionPlayerApi.Start`. The same Editor can act as both server and Player client through `127.0.0.1`. With Domain Reload enabled, entering Play Mode stops any listener started earlier, so start it after entering Play Mode. Ordinary Edit Mode does not create a runtime client. Exiting Play Mode or reloading scripts disconnects the client and removes its driver object. Editor clients report `WindowsEditor`, `OSXEditor`, or `LinuxEditor` so tools can distinguish the Editor runtime from a built Player. No `RemoteExecutionComponent` or settings asset is required.
 
@@ -177,6 +177,10 @@ Concrete commands have a public parameterless constructor and are discovered whe
 
 Use `RemoteExecutionEditorApi.ExecuteCommandAsync<TableReloadCommand>(payload)` to invoke the command. The string-ID API remains available for dynamic commands.
 
+### Built-in Player log search
+
+The package includes `SearchPlayerLogsCommand` and a **日志 (Logs)** tool in the Remote Execution window. It captures logs from `Application.logMessageReceivedThreaded` from Player startup, keeps the newest 2,000 entries within a 512 KiB character budget, and searches messages and stack traces newest-first. The request and response are UTF-8 plain text: send a search term, or an empty payload to return recent logs.
+
 ## Editor API
 
 Business Editor tools can query connected Players and execute commands without accessing sockets:
@@ -255,7 +259,7 @@ The Remote Execution window is the only Editor entry point. Its **Basic** tab ow
 
 The HybridCLR panel provides:
 
-- dynamic `IHybridCLRRemoteExecutionEntry` source compilation into `RemoteExecution.Dynamic`;
+- dynamic `IHybridCLRRemoteExecutionEntry` source compilation into a uniquely named assembly;
 - validated DLL/PDB loading followed by interface-entry execution.
 
 Dynamic source example:
@@ -286,7 +290,7 @@ The entry must be a public concrete class with a public parameterless constructo
 
 The panel does not compile or send project hot-update assemblies. Any assemblies referenced by the dynamic source must already be loaded in the Player.
 
-Editor Play Mode can compile and execute the default entry without adding `RemoteExecution.Dynamic` to the HybridCLR hot-update assembly list. The compiler maps the Editor target to the corresponding desktop build platform. Built Players still require the assembly to be declared in their HybridCLR build configuration. The default source only logs `Remote execution entry completed.` and does not change the scene.
+The compiler creates a unique `RemoteExecution.Dynamic.<random-id>` assembly for every execution, allowing `Assembly.Load` to run edited source repeatedly in the same Player. Loaded assemblies remain in the AppDomain until the Player exits. Editor targets are mapped to their corresponding desktop build platform. The default source only logs `Remote execution entry completed.` and does not change the scene.
 
 HybridCLR loading is not a core protocol feature. The Editor serializes a HybridCLR-owned envelope and sends it through ordinary generic command input frames. The Player adapter validates the entire envelope and its per-artifact hashes before loading. A bundle must contain exactly one public concrete `IHybridCLRRemoteExecutionEntry` implementation with a public parameterless constructor. After loading, the adapter invokes `Task ExecuteAsync(CancellationToken)` inside the fixed `RemoteExecution.HybridCLR.HybridCLRRemoteExecutionCommand` request. The dynamic entry is not published in the command catalog. Projects remain responsible for their normal HybridCLR AOT metadata configuration.
 

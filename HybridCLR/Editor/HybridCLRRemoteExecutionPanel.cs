@@ -53,7 +53,7 @@ public sealed class RemoteExecutionEntry : IHybridCLRRemoteExecutionEntry
             if (capabilityProblem != null)
                 EditorGUILayout.HelpBox(capabilityProblem, MessageType.Info);
             EditorGUILayout.HelpBox(
-                "Source must contain exactly one public IHybridCLRRemoteExecutionEntry implementation with a public parameterless constructor. Loaded assemblies cannot be unloaded; a different build of the same assembly or a partial load requires restarting the Player.",
+                "Source must contain exactly one public IHybridCLRRemoteExecutionEntry implementation with a public parameterless constructor. Each execution loads a uniquely named assembly that remains loaded; a partial load requires restarting the Player.",
                 MessageType.Warning);
         }
 

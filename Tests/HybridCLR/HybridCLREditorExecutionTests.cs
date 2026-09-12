@@ -5,7 +5,6 @@ using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
-using HybridCLR.Editor.Settings;
 using NUnit.Framework;
 using RemoteExecution.HybridCLR;
 using UnityEditor;
@@ -18,7 +17,7 @@ namespace RemoteExecution.Tests
     public sealed class HybridCLREditorExecutionTests
     {
         [UnityTest]
-        public IEnumerator DefaultSourceCompilesFromEditMode()
+        public IEnumerator ConsecutiveBuildsUseUniqueAssemblyNames()
         {
             Assert.That(Application.isPlaying, Is.False);
             Assembly editor = AppDomain.CurrentDomain.GetAssemblies().Single(
@@ -30,44 +29,28 @@ namespace RemoteExecution.Tests
             object request = Activator.CreateInstance(requestType, BindingFlags.Instance | BindingFlags.NonPublic,
                 null, new object[] { Application.platform.ToString(), source }, null);
             Type compiler = editor.GetType("RemoteExecution.HybridCLR.HybridCLRRemoteExecutionCompiler", true);
-            var task = (Task)compiler.GetMethod("BuildAsync", BindingFlags.Static | BindingFlags.NonPublic)
-                .Invoke(null, new[] { request, (object)CancellationToken.None });
-            yield return WaitFor(() => task.IsCompleted, "Default source compilation did not finish.");
-            Assert.That(task.IsFaulted, Is.False, task.Exception?.GetBaseException().Message);
-            task.GetAwaiter().GetResult();
-        }
-
-        [Test]
-        public void BuiltPlayerStillRequiresDynamicAssemblyRegistration()
-        {
-            HybridCLRSettings settings = HybridCLRSettings.Instance;
-            AssemblyDefinitionAsset[] oldDefinitions = settings.hotUpdateAssemblyDefinitions;
-            string[] oldAssemblies = settings.hotUpdateAssemblies;
-            try
+            string[] names = new string[2];
+            for (int i = 0; i < names.Length; i++)
             {
-                settings.hotUpdateAssemblyDefinitions = Array.Empty<AssemblyDefinitionAsset>();
-                settings.hotUpdateAssemblies = Array.Empty<string>();
-                Assembly editor = AppDomain.CurrentDomain.GetAssemblies().Single(
-                    assembly => assembly.GetName().Name == "RemoteExecution.HybridCLR.Editor");
-                Type requestType = editor.GetType("RemoteExecution.HybridCLR.HybridCLRRemoteBuildRequest", true);
-                object request = Activator.CreateInstance(requestType, BindingFlags.Instance | BindingFlags.NonPublic,
-                    null, new object[] { "StandaloneWindows64", "public class Source {}" }, null);
-                Type compiler = editor.GetType("RemoteExecution.HybridCLR.HybridCLRRemoteExecutionCompiler", true);
                 var task = (Task)compiler.GetMethod("BuildAsync", BindingFlags.Static | BindingFlags.NonPublic)
                     .Invoke(null, new[] { request, (object)CancellationToken.None });
-                Assert.That(task.IsFaulted, Is.True);
-                Assert.That(task.Exception.GetBaseException().Message,
-                    Does.Contain("Configure 'RemoteExecution.Dynamic'"));
+                yield return WaitFor(() => task.IsCompleted,
+                    "Default source compilation did not finish.");
+                Assert.That(task.IsFaulted, Is.False,
+                    task.Exception?.GetBaseException().Message);
+                task.GetAwaiter().GetResult();
+                object output = task.GetType().GetProperty("Result").GetValue(task);
+                var artifacts = (System.Collections.IList)output.GetType()
+                    .GetProperty("Artifacts", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .GetValue(output);
+                names[i] = ((HybridCLRBundleArtifact)artifacts[0]).Name;
+                Assert.That(names[i], Does.StartWith("RemoteExecution.Dynamic."));
             }
-            finally
-            {
-                settings.hotUpdateAssemblyDefinitions = oldDefinitions;
-                settings.hotUpdateAssemblies = oldAssemblies;
-            }
+            Assert.That(names[1], Is.Not.EqualTo(names[0]));
         }
 
         [UnityTest]
-        public IEnumerator DefaultSourceRunsInEditorWithoutRegisteredDynamicAssembly()
+        public IEnumerator DefaultSourceRunsRepeatedlyInEditor()
         {
             bool reloadDomain = !EditorSettings.enterPlayModeOptionsEnabled ||
                 (EditorSettings.enterPlayModeOptions & EnterPlayModeOptions.DisableDomainReload) == 0;
@@ -78,18 +61,16 @@ namespace RemoteExecution.Tests
 
         private static IEnumerator ExecuteDefaultSource()
         {
-            HybridCLRSettings settings = HybridCLRSettings.Instance;
-            AssemblyDefinitionAsset[] oldDefinitions = settings.hotUpdateAssemblyDefinitions;
-            string[] oldAssemblies = settings.hotUpdateAssemblies;
-            bool entryLogged = false;
+            int entryLogCount = 0;
             Application.LogCallback observe = (message, trace, type) =>
-                entryLogged |= type == LogType.Log && message == "Remote execution entry completed.";
+            {
+                if (type == LogType.Log && message == "Remote execution entry completed.")
+                    entryLogCount++;
+            };
             using (var cancellation = new CancellationTokenSource())
             {
                 try
                 {
-                    settings.hotUpdateAssemblyDefinitions = Array.Empty<AssemblyDefinitionAsset>();
-                    settings.hotUpdateAssemblies = Array.Empty<string>();
                     Application.logMessageReceived += observe;
                     var transport = RemoteExecutionTcpTransport.CreateServer("127.0.0.1", 0);
                     RemoteExecutionEditorApi.StartServer(new RemoteExecutionServerOptions(transport));
@@ -108,19 +89,26 @@ namespace RemoteExecution.Tests
                     Type requestType = editor.GetType("RemoteExecution.HybridCLR.HybridCLRRemoteBuildRequest", true);
                     object request = Activator.CreateInstance(requestType, BindingFlags.Instance | BindingFlags.NonPublic,
                         null, new object[] { player.Target, source }, null);
-                    var execution = (Task<string>)panel.GetMethod("RunAsync", BindingFlags.Static | BindingFlags.NonPublic)
-                        .Invoke(null, new[] { (object)player.Id, request, cancellation.Token });
-                    yield return WaitFor(() => execution.IsCompleted, "Default source execution did not complete.");
-                    Assert.That(execution.IsFaulted, Is.False, execution.Exception?.GetBaseException().Message);
-                    Assert.That(execution.GetAwaiter().GetResult(), Does.Contain("entry executed"));
-                    Assert.That(entryLogged, Is.True, "The default entry must run and write its expected log.");
+                    for (int i = 0; i < 2; i++)
+                    {
+                        var execution = (Task<string>)panel.GetMethod("RunAsync",
+                                BindingFlags.Static | BindingFlags.NonPublic)
+                            .Invoke(null, new[] { (object)player.Id, request,
+                                cancellation.Token });
+                        yield return WaitFor(() => execution.IsCompleted,
+                            "Default source execution did not complete.");
+                        Assert.That(execution.IsFaulted, Is.False,
+                            execution.Exception?.GetBaseException().Message);
+                        Assert.That(execution.GetAwaiter().GetResult(),
+                            Does.Contain("entry executed"));
+                    }
+                    Assert.That(entryLogCount, Is.EqualTo(2),
+                        "Each execution must load and invoke a new dynamic assembly.");
                 }
                 finally
                 {
                     cancellation.Cancel();
                     Application.logMessageReceived -= observe;
-                    settings.hotUpdateAssemblyDefinitions = oldDefinitions;
-                    settings.hotUpdateAssemblies = oldAssemblies;
                     RemoteExecutionPlayerApi.Stop();
                     RemoteExecutionEditorApi.StopServer();
                 }
