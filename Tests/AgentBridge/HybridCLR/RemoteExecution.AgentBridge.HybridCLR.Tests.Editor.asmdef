@@ -1,0 +1,39 @@
+{
+  "name": "RemoteExecution.AgentBridge.HybridCLR.Tests.Editor",
+  "rootNamespace": "RemoteExecution.AgentBridge",
+  "references": [
+    "AgentBridge.Editor",
+    "RemoteExecution.AgentBridge.Editor",
+    "RemoteExecution.Runtime",
+    "RemoteExecution.Editor",
+    "RemoteExecution.HybridCLR.Editor",
+    "RemoteExecution.AgentBridge.HybridCLR.Editor"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "autoReferenced": false,
+  "versionDefines": [
+    {
+      "name": "me.xw.unityagentbridge",
+      "expression": "2.0.2",
+      "define": "REMOTE_EXECUTION_AGENT_BRIDGE"
+    },
+    {
+      "name": "com.code-philosophy.hybridclr",
+      "expression": "1.0",
+      "define": "REMOTE_EXECUTION_HYBRIDCLR"
+    }
+  ],
+  "defineConstraints": [
+    "REMOTE_EXECUTION_AGENT_BRIDGE",
+    "REMOTE_EXECUTION_HYBRIDCLR"
+  ],
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ],
+  "overrideReferences": true,
+  "precompiledReferences": [
+    "Newtonsoft.Json.dll"
+  ]
+}

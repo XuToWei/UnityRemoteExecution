@@ -1,5 +1,4 @@
 using System;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEditor;
@@ -9,7 +8,6 @@ namespace RemoteExecution.HybridCLR
 {
     internal sealed class HybridCLRRemoteExecutionPanel : IRemoteExecutionEditorPanel
     {
-        private static readonly SemaphoreSlim s_BuildLock = new SemaphoreSlim(1, 1);
         private const string DefaultSource = @"using System.Threading;
 using System.Threading.Tasks;
 using RemoteExecution.HybridCLR;
@@ -66,21 +64,8 @@ public sealed class RemoteExecutionEntry : IHybridCLRRemoteExecutionEntry
             EditorGUILayout.EndScrollView();
         }
 
-        private static string GetCapabilityProblem(RemoteExecutionClientInfo player)
-        {
-            if (player == null) return "Select a connected Player.";
-            if (!player.IsReady) return "The selected Player is not ready.";
-            RemoteCommandSnapshot applyCommand = player.Commands.FirstOrDefault(command =>
-                string.Equals(command.TypeName, HybridCLRBundleCodec.TypeName,
-                    StringComparison.Ordinal));
-            if (applyCommand == null)
-                return "Refresh the command catalog or use a Player containing the HybridCLR command.";
-            if (!applyCommand.Executable) return "The Player HybridCLR command is unavailable.";
-            if (!string.Equals(applyCommand.RequestContentType,
-                HybridCLRBundleCodec.ContentType, StringComparison.OrdinalIgnoreCase))
-                return "The Player HybridCLR command uses an incompatible content type.";
-            return null;
-        }
+        private static string GetCapabilityProblem(RemoteExecutionClientInfo player) =>
+            HybridCLRRemoteExecutionEditorApi.GetCapabilityProblem(player);
 
         private void StartOperation(RemoteExecutionEditorContext context,
             RemoteExecutionClientInfo player)
@@ -94,42 +79,13 @@ public sealed class RemoteExecutionEntry : IHybridCLRRemoteExecutionEntry
         private static async Task<string> RunAsync(int sessionId,
             HybridCLRRemoteBuildRequest request, CancellationToken cancellationToken)
         {
-            await RemoteExecutionEditorApi.RefreshCommandsAsync(sessionId, cancellationToken);
-            RemoteExecutionClientInfo client = FindReadyClient(sessionId);
-            string capabilityProblem = GetCapabilityProblem(client);
-            if (capabilityProblem != null) throw new InvalidOperationException(capabilityProblem);
-
-            await s_BuildLock.WaitAsync(cancellationToken);
-            HybridCLRRemoteBuildOutput output;
-            try
-            {
-                output = await HybridCLRRemoteExecutionCompiler.BuildAsync(request,
-                    cancellationToken);
-            }
-            finally { s_BuildLock.Release(); }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            byte[] envelope = HybridCLRBundleCodec.Encode(new HybridCLRBundle(
-                Guid.NewGuid(), output.Target, output.Artifacts));
-            if (envelope.Length > RemoteExecutionProtocol.MaxCommandRequestBytes)
-                throw new InvalidOperationException(
-                    $"HybridCLR bundle exceeds the global Player limit of {RemoteExecutionProtocol.MaxCommandRequestBytes} bytes.");
-            RemoteExecutionResult result = await RemoteExecutionEditorApi.ExecuteCommandAsync<
-                HybridCLRRemoteExecutionCommand>(
-                sessionId, envelope, cancellationToken);
+            RemoteExecutionResult result = await HybridCLRRemoteExecutionEditorApi.ExecuteSourceAsync(
+                sessionId, request.Source, cancellationToken);
             if (!result.Succeeded)
                 throw new InvalidOperationException(
                     $"Player apply or execution failed [{result.Code}]: {result.Message}");
             return string.IsNullOrWhiteSpace(result.Message)
                 ? "Compile, apply and execution completed." : result.Message;
         }
-
-        private static RemoteExecutionClientInfo FindReadyClient(int sessionId)
-        {
-            return RemoteExecutionEditorApi.GetClients().FirstOrDefault(client =>
-                       client.Id == sessionId && client.IsReady)
-                   ?? throw new InvalidOperationException("Player is no longer connected.");
-        }
-
     }
 }

@@ -1,0 +1,31 @@
+{
+  "name": "RemoteExecution.AgentBridge.HybridCLR.Editor",
+  "rootNamespace": "RemoteExecution.AgentBridge",
+  "references": [
+    "AgentBridge.Editor",
+    "RemoteExecution.AgentBridge.Editor",
+    "RemoteExecution.Runtime",
+    "RemoteExecution.Editor",
+    "RemoteExecution.HybridCLR.Editor"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "autoReferenced": true,
+  "versionDefines": [
+    {
+      "name": "me.xw.unityagentbridge",
+      "expression": "2.0.2",
+      "define": "REMOTE_EXECUTION_AGENT_BRIDGE"
+    },
+    {
+      "name": "com.code-philosophy.hybridclr",
+      "expression": "1.0",
+      "define": "REMOTE_EXECUTION_HYBRIDCLR"
+    }
+  ],
+  "defineConstraints": [
+    "REMOTE_EXECUTION_AGENT_BRIDGE",
+    "REMOTE_EXECUTION_HYBRIDCLR"
+  ]
+}

@@ -251,6 +251,33 @@ A panel must be a concrete ordinary C# class with a parameterless constructor. I
 
 The cancellation-aware `RefreshCommandsAsync` and `ExecuteCommandAsync` overloads accept a `CancellationToken`. Cancellation remains cooperative for Unity compiler calls and Player handlers.
 
+## Optional UnityAgentBridge integration
+
+Install [UnityAgentBridge](https://github.com/XuToWei/UnityAgentBridge) (`me.xw.unityagentbridge` 2.0.2+) in the same Unity project. Bridge automatically discovers these Editor commands through `list_commands`:
+
+| Bridge command | Capability |
+| --- | --- |
+| `remote_execution` | Listener status/start/stop, Player discovery, command catalogs, execution and Player log search |
+| `remote_execution_csharp` | Compile and execute C# on the Player when HybridCLR is also installed and enabled |
+
+No Remote Execution window or selection is required. Use the numeric `sessionId` returned by `players` rather than the Player's display `clientId`. Example Bridge requests (exchange IDs omitted; replace session 1 with the returned session):
+
+```json
+{"command":"remote_execution","params":{"action":"start","bindAddress":"127.0.0.1","port":38421}}
+{"command":"remote_execution","params":{"action":"players"}}
+{"command":"remote_execution","params":{"action":"commands","sessionId":1}}
+{"command":"remote_execution","params":{"action":"search_logs","sessionId":1,"query":"Exception"}}
+{"command":"remote_execution","params":{"action":"execute","sessionId":1,"commandType":"RemoteExecution.SearchPlayerLogsCommand","payloadText":"NullReferenceException"}}
+```
+
+The Player still connects through its own `RemoteExecutionPlayerApi.Start` startup flow. The default listener accepts local connections; configure a reachable bind address for devices. `status` reports the transport and endpoint. `stop` stops listening and disconnects all Players. Starting an active listener returns `SERVER_ALREADY_RUNNING` rather than replacing connections.
+
+For `execute`, use the exact catalog `typeName` as `commandType`. Supply either UTF-8 `payloadText` or binary `payloadBase64`, or omit both for an empty request. The adapter refreshes the catalog and uses the command's advertised content type. Results include `succeeded`, `code`, `message`, `contentType` and `payloadBytes`. Text/JSON with valid UTF-8 returns `payloadText`; other data returns lossless `payloadBase64`. An outer Bridge `status: ok` means the invocation completed: always inspect `result.succeeded` for Player failures. Results over 64 KiB are saved losslessly under the Editor project's `Library/RemoteExecution/AgentBridge/`; `payloadFile` gives an absolute path to the raw bytes for the agent to read and delete when finished. Bridge request/response JSON is limited to 1 MiB including escaping and Base64 overhead. Core timeouts and per-Player serialization still apply.
+
+`remote_execution_csharp` takes `sessionId` and a full C# `source` string (up to 512 KiB UTF-8), using the `IHybridCLRRemoteExecutionEntry` contract shown below. Report findings with `Debug.Log` and retrieve them with `search_logs`. It shares `HybridCLRRemoteExecutionEditorApi.ExecuteSourceAsync` and the compiler lock with the window, validates project settings and Player capabilities, and loads a uniquely named assembly per call. Partial loading failures require restarting the Player. Allow the Bridge caller enough time for compilation (up to 120 seconds) plus the advertised Player command timeout.
+
+Without Bridge, neither command is compiled. Without HybridCLR, the general command and log search remain available but the C# command is absent. The adapters are Editor-only and add no Bridge dependency to the Player. `RemoteExecution.AgentBridge.Tests.Editor` provides optional tests when Bridge is installed.
+
 ## Optional HybridCLR adapter
 
 When `com.code-philosophy.hybridclr` is installed, the package's `versionDefines` activates the conditional adapter automatically. It adds a **HybridCLR** tool inside **Window > Remote Execution** and the Player command `RemoteExecution.HybridCLR.HybridCLRRemoteExecutionCommand`.

@@ -248,6 +248,38 @@ Panel 必须是提供无参构造的 concrete 普通 C# 类，稳定 `Id` 必须
 
 带取消参数的 `RefreshCommandsAsync`、`ExecuteCommandAsync` overload 接收 `CancellationToken`。Unity 编译器调用和 Player handler 的取消仍然是协作式的。
 
+## 可选 UnityAgentBridge 集成
+
+在同一 Unity 工程安装 [UnityAgentBridge](https://github.com/XuToWei/UnityAgentBridge)（包名 `me.xw.unityagentbridge`，2.0.2 或更高版本）后，Editor 适配器会自动编译，Bridge 的 `list_commands` 会发现以下命令。无需打开 Remote Execution 窗口，也无需选中 Player；通过返回的数字 `sessionId` 明确选择目标。
+
+| Bridge command | 能力 |
+| --- | --- |
+| `remote_execution` | 监听状态/启停、Player 列表、刷新命令目录、执行 Player 命令、搜索 Player 日志 |
+| `remote_execution_csharp` | 同时安装并启用 HybridCLR 时，编译 C# 并在 Player 执行 |
+
+通过 Bridge 依次发送请求（以下省略外层请求 ID 等 exchange 字段；`sessionId: 1` 必须替换为实际返回值）：
+
+```json
+{"command":"remote_execution","params":{"action":"start","bindAddress":"127.0.0.1","port":38421}}
+{"command":"remote_execution","params":{"action":"players"}}
+{"command":"remote_execution","params":{"action":"commands","sessionId":1}}
+{"command":"remote_execution","params":{"action":"search_logs","sessionId":1,"query":"Exception"}}
+```
+
+Player 仍须由业务代码调用 `RemoteExecutionPlayerApi.Start` 连接；Bridge 不会自动启动 Player。监听默认仅接受本机连接，真机连接时指定可达的监听地址。`status` 返回当前传输和端点；`stop` 停止监听并断开全部 Player。监听已启动时再次 `start` 返回 `SERVER_ALREADY_RUNNING`，避免无意替换现有连接。
+
+执行目录中的任意命令时，使用其完整 `typeName`：
+
+```json
+{"command":"remote_execution","params":{"action":"execute","sessionId":1,"commandType":"RemoteExecution.SearchPlayerLogsCommand","payloadText":"NullReferenceException"}}
+```
+
+`payloadText` 编码为 UTF-8；二进制输入使用 `payloadBase64`，两者互斥，省略时发送空 payload。适配器先刷新目录，再使用目标命令声明的 content type 执行。响应包含 `succeeded`、`code`、`message`、`contentType`、`payloadBytes`，文本/JSON 的有效 UTF-8 返回 `payloadText`，其余返回无损的 `payloadBase64`。Bridge 外层 `status: ok` 只代表调用完成，AI 还必须检查 `result.succeeded` 判断 Player 操作是否成功。超过 64 KiB 的结果保存到 Editor 工程的 `Library/RemoteExecution/AgentBridge/`，返回绝对 `payloadFile` 路径（原始字节，无损），AI 可按需读取，使用后可删除。Bridge 请求/响应 JSON 本身受 1 MiB 上限约束（含 JSON 转义和 Base64），远程超时及每个 Player 的串行执行沿用核心协议。
+
+`remote_execution_csharp` 接收 `sessionId` 和完整 `source` 字符串。源码格式与下文的 `IHybridCLRRemoteExecutionEntry` 示例相同，最大 512 KiB UTF-8；用 `Debug.Log` 输出诊断结果，再用 `search_logs` 获取。它与窗口共用 `HybridCLRRemoteExecutionEditorApi.ExecuteSourceAsync` 和编译锁，检查项目设置及目标 Player 的能力；每次加载唯一命名的程序集，部分加载失败仍要求重启 Player。Bridge 调用方的等待时间应覆盖编译（最多 120 秒）和目录中声明的远程命令超时。
+
+未安装 Bridge 时两个 command 都不编译；只安装 Bridge 时通用命令与日志搜索可用，C# command 不编译。所有适配器均为 Editor-only，不向 Player 添加 Bridge 依赖。包测试额外提供 `RemoteExecution.AgentBridge.Tests.Editor`，仅在 Bridge 可用时启用。
+
 ## 可选 HybridCLR 适配器
 
 安装 `com.code-philosophy.hybridclr` 后，包内 `versionDefines` 会自动启用条件适配器。它会在 **Window > Remote Execution** 内增加 **HybridCLR** 工具，并在 Player 注册 `RemoteExecution.HybridCLR.HybridCLRRemoteExecutionCommand`。

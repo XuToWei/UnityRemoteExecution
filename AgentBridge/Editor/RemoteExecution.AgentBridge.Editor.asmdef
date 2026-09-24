@@ -1,0 +1,23 @@
+{
+  "name": "RemoteExecution.AgentBridge.Editor",
+  "rootNamespace": "RemoteExecution.AgentBridge",
+  "references": [
+    "RemoteExecution.Runtime",
+    "RemoteExecution.Editor",
+    "AgentBridge.Editor"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "autoReferenced": true,
+  "versionDefines": [
+    {
+      "name": "me.xw.unityagentbridge",
+      "expression": "2.0.2",
+      "define": "REMOTE_EXECUTION_AGENT_BRIDGE"
+    }
+  ],
+  "defineConstraints": [
+    "REMOTE_EXECUTION_AGENT_BRIDGE"
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "name": "RemoteExecution.AgentBridge.Tests.Editor",
+  "references": [
+    "RemoteExecution.Runtime",
+    "RemoteExecution.Editor",
+    "RemoteExecution.AgentBridge.Editor",
+    "AgentBridge.Editor"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "autoReferenced": false,
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ],
+  "versionDefines": [
+    {
+      "name": "me.xw.unityagentbridge",
+      "expression": "2.0.2",
+      "define": "REMOTE_EXECUTION_AGENT_BRIDGE"
+    }
+  ],
+  "defineConstraints": [
+    "REMOTE_EXECUTION_AGENT_BRIDGE"
+  ],
+  "overrideReferences": true,
+  "precompiledReferences": [
+    "Newtonsoft.Json.dll"
+  ]
+}
