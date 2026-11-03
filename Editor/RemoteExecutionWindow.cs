@@ -26,6 +26,7 @@ namespace RemoteExecution
         private readonly List<PanelEntry> m_Panels = new List<PanelEntry>();
         private readonly Dictionary<int, OperationState> m_Operations =
             new Dictionary<int, OperationState>();
+        private readonly object m_SelectionOwner = new object();
         private bool m_Enabled;
         private int m_ContextGeneration;
         private string m_WindowStatus;
@@ -77,7 +78,7 @@ namespace RemoteExecution
         {
             m_Enabled = false;
             m_ContextGeneration++;
-            RemoteExecutionEditorApi.ClearSelectedSession(GetInstanceID());
+            RemoteExecutionEditorApi.ClearSelectedSession(m_SelectionOwner);
             EditorApplication.update -= OnEditorUpdate;
             CancelAndDetachOperations();
             DisposePanels();
@@ -334,7 +335,7 @@ namespace RemoteExecution
             if (clients.Count == 0)
             {
                 m_SelectedSessionId = 0;
-                RemoteExecutionEditorApi.SetSelectedSession(GetInstanceID(), 0);
+                RemoteExecutionEditorApi.SetSelectedSession(m_SelectionOwner, 0);
                 EditorGUILayout.HelpBox("No Players are connected.", MessageType.None);
                 return null;
             }
@@ -351,7 +352,7 @@ namespace RemoteExecution
             current = EditorGUILayout.Popup(current, labels);
             RemoteExecutionClientInfo selected = clients[Math.Max(0, current)];
             m_SelectedSessionId = selected.Id;
-            RemoteExecutionEditorApi.SetSelectedSession(GetInstanceID(), selected.Id);
+            RemoteExecutionEditorApi.SetSelectedSession(m_SelectionOwner, selected.Id);
             return selected;
         }
 

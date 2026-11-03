@@ -8,11 +8,21 @@ Unity Remote Execution 是一个面向开发工作流的 Unity Editor 与 Player
 
 ## 安装
 
-在 Unity 2021.3 或更高版本项目中打开 **Window > Package Manager**，点击左上角的 **+**，选择 **Add package from git URL...**，粘贴以下地址：
+在 Unity 6.6（6000.6）或更高版本项目中打开 **Window > Package Manager**，点击左上角的 **+**，选择 **Add package from git URL...**，粘贴以下地址：
 
 ```text
 https://github.com/XuToWei/UnityRemoteExecution.git
 ```
+
+### Unity 2021.3–6000.3
+
+Unity 2021.3 至 Unity 6.3（6000.3，含该版本系列）项目请在 **Add package from git URL...** 中使用带有 `Unity2021.3-6000.3` tag 的地址：
+
+```text
+https://github.com/XuToWei/UnityRemoteExecution.git#Unity2021.3-6000.3
+```
+
+此地址将包固定到旧版本，其 API 和使用要求请参阅[该 tag 对应的中文文档](https://github.com/XuToWei/UnityRemoteExecution/blob/Unity2021.3-6000.3/README.zh-CN.md)。项目升级到 Unity 6000.6 或更高版本后，可改用上方不带 tag 的地址安装当前版本。
 
 ## Player 启动
 
@@ -319,17 +329,19 @@ public sealed class RemoteExecutionEntry : IHybridCLRRemoteExecutionEntry
 
 该 panel 不会编译或发送项目中的热更新程序集。动态源码引用的程序集必须已在 Player 中加载。
 
-编译器每次执行都会创建唯一的 `RemoteExecution.Dynamic.<随机ID>` 程序集，因此修改源码后可在同一个 Player 中连续调用 `Assembly.Load`。已加载的程序集会保留到 Player 退出。Editor target 会映射到对应的桌面编译平台。默认源码只输出 `Remote execution entry completed.` 日志，不会修改场景。
+编译器每次执行都会创建唯一的 `RemoteExecution.Dynamic.<随机ID>` 程序集，因此修改源码后可在同一个 Player 中连续执行。已加载的程序集会保留在当前执行上下文中，直到 Player 退出或 Editor 重新加载代码。Editor target 会映射到对应的桌面编译平台。默认源码只输出 `Remote execution entry completed.` 日志，不会修改场景。
+
+使用 Unity 的 `CurrentAssemblies` API 发现命令和加载动态程序集，确保程序集属于当前 Unity 执行上下文。使用的 HybridCLR 版本也需要支持项目的 Unity 版本和目标平台。
 
 HybridCLR 加载不是核心协议特性。Editor 把自有的 HybridCLR envelope 通过普通通用命令输入帧发送。Player 在加载前完整校验 envelope 和每个 artifact 的 hash。Bundle 必须包含且仅包含一个 public concrete `IHybridCLRRemoteExecutionEntry` 实现，并提供 public 无参构造函数。加载后，适配器会在固定的 `RemoteExecution.HybridCLR.HybridCLRRemoteExecutionCommand` 请求内调用 `Task ExecuteAsync(CancellationToken)`；动态入口不会发布到命令目录。项目仍需自行完成正常的 HybridCLR AOT metadata 配置。
 
-完整 envelope（含 metadata）最大 128 MiB，并会完整缓冲在内存中。程序集不能从 Player AppDomain 卸载。同名程序集 hash 变化，或加载、解析入口过程中发生失败，都必须重启 Player。部分加载无法回滚；适配器会拒绝后续 apply，避免继续扩大不一致状态。
+完整 envelope（含 metadata）最大 128 MiB，并会完整缓冲在内存中。适配器无法单独卸载程序集。同名程序集 hash 变化，或加载、解析入口过程中发生失败，都必须重启 Player。部分加载无法回滚；适配器会拒绝后续 apply，避免继续扩大不一致状态。
 
 未安装 HybridCLR 时，该命令和 HybridCLR panel 都不存在。命令页仍显示其他模块提供的 panel；若没有任何实现，则显示空状态。
 
 ## 限制和行为
 
-- Unity 2021.3 或更高版本。
+- 当前版本要求 Unity 6.6（6000.6）或更高版本。Unity 2021.3–6000.3 请使用 `Unity2021.3-6000.3` tag。
 - 包本身不强制要求 Development/Debug Player；构建包含范围和生产环境启用策略由接入项目控制。
 - Player 不会自动启动或重连；业务代码负责 `Start`、重试和 `Stop`。
 - 单帧 payload 最大 1 MiB。
@@ -359,4 +371,4 @@ Player 的命令超时独立于主线程更新；同步命令也应定期检查�
 
 ## 回归测试
 
-安装与 Unity 版本匹配的 Unity Test Framework，刷新资源后在 EditMode 运行 `RemoteExecution.Tests.Editor`。安装 HybridCLR 后，还可运行 `RemoteExecution.HybridCLR.Tests.Editor` 验证 bundle 编解码。以 Git 包安装时，将 `com.xw.remote-execution` 加入工程 `Packages/manifest.json` 的 `testables` 列表以启用包测试。协议回归使用隔离的内存通道；Editor Player 集成测试会进入 Play Mode，使用临时本机 TCP 监听验证命令和连接清理，然后返回 Edit Mode。
+安装与 Unity 版本匹配的 Unity Test Framework，刷新资源后在 EditMode 运行 `RemoteExecution.Tests.Editor`。安装 HybridCLR 后，还可运行 `RemoteExecution.HybridCLR.Tests.Editor` 验证 bundle 编解码、动态编译、带符号与不带符号的程序集加载，以及 Editor 中的连续执行。以 Git 包安装时，将 `com.xw.remote-execution` 加入工程 `Packages/manifest.json` 的 `testables` 列表以启用包测试。协议回归使用隔离的内存通道；Editor Player 集成测试会进入 Play Mode，使用临时本机 TCP 监听验证命令、窗口选择归属和连接清理，然后返回 Edit Mode。

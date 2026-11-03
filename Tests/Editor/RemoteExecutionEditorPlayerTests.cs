@@ -54,6 +54,12 @@ namespace RemoteExecution.Tests
             Action<RemoteExecutionConnectionState> stateChanged = _ =>
                 wrongCallbackThread |= Thread.CurrentThread.ManagedThreadId != mainThreadId;
             RemoteExecutionPlayerApi.ConnectionStateChanged += stateChanged;
+            var previousOwner = new object();
+            var selectionOwner = new object();
+            MethodInfo select = typeof(RemoteExecutionEditorApi).GetMethod("SetSelectedSession",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            MethodInfo clear = typeof(RemoteExecutionEditorApi).GetMethod("ClearSelectedSession",
+                BindingFlags.Static | BindingFlags.NonPublic);
             try
             {
                 for (int cycle = 0; cycle < 3; cycle++)
@@ -76,15 +82,21 @@ namespace RemoteExecution.Tests
                     Assert.That(player.Target, Is.EqualTo(Application.platform.ToString()));
                     Assert.That(DriverCount(), Is.EqualTo(1));
 
+                    select.Invoke(null, new[] { previousOwner, (object)player.Id });
+                    select.Invoke(null, new[] { selectionOwner, (object)player.Id });
+                    clear.Invoke(null, new[] { previousOwner });
                     byte[] payload = Enumerable.Range(0, RemoteExecutionProtocol.MaxChunkBytes + 7)
                         .Select(value => (byte)value).ToArray();
                     Task<RemoteExecutionResult> execution =
-                        RemoteExecutionEditorApi.ExecuteCommandAsync<EditorPlayerEchoCommand>(player.Id, payload);
+                        RemoteExecutionEditorApi.ExecuteCommandAsync<EditorPlayerEchoCommand>(payload);
                     yield return WaitFor(() => execution.IsCompleted, "The loopback command did not finish.");
                     RemoteExecutionResult result = execution.GetAwaiter().GetResult();
                     Assert.That(result.Succeeded, Is.True, result.Message);
                     Assert.That(result.Payload, Is.EqualTo(payload));
                     Assert.That(result.Message, Is.EqualTo($"{mainThreadId}:{mainThreadId}"));
+                    clear.Invoke(null, new[] { selectionOwner });
+                    Assert.Throws<InvalidOperationException>(() =>
+                        RemoteExecutionEditorApi.ExecuteCommandAsync<EditorPlayerEchoCommand>());
 
                     if (cycle == 0)
                     {
@@ -107,7 +119,11 @@ namespace RemoteExecution.Tests
                 Assert.That(wrongCallbackThread, Is.False);
                 Assert.That(RemoteExecutionPlayerApi.IsConnected, Is.True);
             }
-            finally { RemoteExecutionPlayerApi.ConnectionStateChanged -= stateChanged; }
+            finally
+            {
+                clear.Invoke(null, new[] { selectionOwner });
+                RemoteExecutionPlayerApi.ConnectionStateChanged -= stateChanged;
+            }
         }
 
         [UnityTearDown]

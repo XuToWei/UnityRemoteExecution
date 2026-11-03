@@ -8,11 +8,21 @@ The core package has no HybridCLR dependency. HybridCLR compilation and runtime 
 
 ## Installation
 
-In a Unity 2021.3 or newer project, open **Window > Package Manager**, click **+**, select **Add package from git URL...**, and paste:
+In a Unity 6.6 (6000.6) or newer project, open **Window > Package Manager**, click **+**, select **Add package from git URL...**, and paste:
 
 ```text
 https://github.com/XuToWei/UnityRemoteExecution.git
 ```
+
+### Unity 2021.3–6000.3
+
+For Unity 2021.3 through Unity 6.3 (6000.3), inclusive, use **Add package from git URL...** with the `Unity2021.3-6000.3` tag:
+
+```text
+https://github.com/XuToWei/UnityRemoteExecution.git#Unity2021.3-6000.3
+```
+
+This URL pins the package to the legacy release. Refer to the [README for that tag](https://github.com/XuToWei/UnityRemoteExecution/blob/Unity2021.3-6000.3/README.md) for its APIs and requirements. After upgrading to Unity 6000.6 or newer, use the untagged URL above to install the current version.
 
 ## Player startup
 
@@ -317,17 +327,19 @@ The entry must be a public concrete class with a public parameterless constructo
 
 The panel does not compile or send project hot-update assemblies. Any assemblies referenced by the dynamic source must already be loaded in the Player.
 
-The compiler creates a unique `RemoteExecution.Dynamic.<random-id>` assembly for every execution, allowing `Assembly.Load` to run edited source repeatedly in the same Player. Loaded assemblies remain in the AppDomain until the Player exits. Editor targets are mapped to their corresponding desktop build platform. The default source only logs `Remote execution entry completed.` and does not change the scene.
+The compiler creates a unique `RemoteExecution.Dynamic.<random-id>` assembly for every execution, allowing edited source to run repeatedly in the same Player. Loaded assemblies remain in the current execution context until the Player exits or the Editor reloads code. Editor targets are mapped to their corresponding desktop build platform. The default source only logs `Remote execution entry completed.` and does not change the scene.
+
+Command discovery and dynamic assembly loading use Unity's `CurrentAssemblies` APIs so assemblies belong to the current Unity execution context. HybridCLR must also support the consuming project's Unity version and target platform.
 
 HybridCLR loading is not a core protocol feature. The Editor serializes a HybridCLR-owned envelope and sends it through ordinary generic command input frames. The Player adapter validates the entire envelope and its per-artifact hashes before loading. A bundle must contain exactly one public concrete `IHybridCLRRemoteExecutionEntry` implementation with a public parameterless constructor. After loading, the adapter invokes `Task ExecuteAsync(CancellationToken)` inside the fixed `RemoteExecution.HybridCLR.HybridCLRRemoteExecutionCommand` request. The dynamic entry is not published in the command catalog. Projects remain responsible for their normal HybridCLR AOT metadata configuration.
 
-The complete envelope, including metadata, is limited to 128 MiB and is buffered in memory. Assemblies cannot be unloaded from the Player AppDomain. Reapplying the same name with a different hash, or a failure while loading or resolving the entry, requires restarting the Player. A partial load cannot be rolled back; the adapter rejects later apply attempts to avoid expanding an inconsistent state.
+The complete envelope, including metadata, is limited to 128 MiB and is buffered in memory. The adapter cannot unload individual assemblies. Reapplying the same name with a different hash, or a failure while loading or resolving the entry, requires restarting the Player. A partial load cannot be rolled back; the adapter rejects later apply attempts to avoid expanding an inconsistent state.
 
 Without HybridCLR, the adapter command and HybridCLR panel are absent. The Commands tab then shows panels contributed by other modules, or an empty state when none are installed.
 
 ## Limits and behavior
 
-- Unity 2021.3 or newer.
+- The current version requires Unity 6.6 (6000.6) or newer. For Unity 2021.3–6000.3, use the `Unity2021.3-6000.3` tag.
 - The package does not enforce a Development/Debug Player requirement; consuming projects control build inclusion and production enablement.
 - The Player never starts or reconnects automatically; business code owns `Start`, retry, and `Stop`.
 - Maximum frame payload: 1 MiB.
@@ -357,4 +369,4 @@ A failure with no payload and no content type preserves its remote error code. R
 
 ## Regression tests
 
-Install a Unity Test Framework version compatible with your Editor, refresh assets, and run `RemoteExecution.Tests.Editor` in EditMode. With HybridCLR installed, also run `RemoteExecution.HybridCLR.Tests.Editor` for bundle encoding and decoding. When installed as a Git package, add `com.xw.remote-execution` to the project manifest `testables` array to enable package tests. Protocol regressions use isolated in-memory channels. The Editor Player integration test enters Play Mode, uses a temporary loopback TCP listener to verify commands and connection cleanup, then returns to Edit Mode.
+Install a Unity Test Framework version compatible with your Editor, refresh assets, and run `RemoteExecution.Tests.Editor` in EditMode. With HybridCLR installed, also run `RemoteExecution.HybridCLR.Tests.Editor` for bundle encoding/decoding, dynamic compilation, loading with and without symbols, and repeated Editor execution. When installed as a Git package, add `com.xw.remote-execution` to the project manifest `testables` array to enable package tests. Protocol regressions use isolated in-memory channels. The Editor Player integration test enters Play Mode, uses a temporary loopback TCP listener to verify commands, window selection ownership, and connection cleanup, then returns to Edit Mode.

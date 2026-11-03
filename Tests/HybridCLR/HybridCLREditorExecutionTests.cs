@@ -8,8 +8,8 @@ using System.Threading.Tasks;
 using NUnit.Framework;
 using RemoteExecution.HybridCLR;
 using UnityEditor;
-using UnityEditorInternal;
 using UnityEngine;
+using UnityEngine.Assemblies;
 using UnityEngine.TestTools;
 
 namespace RemoteExecution.Tests
@@ -17,11 +17,10 @@ namespace RemoteExecution.Tests
     public sealed class HybridCLREditorExecutionTests
     {
         [UnityTest]
-        public IEnumerator ConsecutiveBuildsUseUniqueAssemblyNames()
+        public IEnumerator ConsecutiveBuildsLoadUniqueAssembliesWithAndWithoutSymbols()
         {
             Assert.That(Application.isPlaying, Is.False);
-            Assembly editor = AppDomain.CurrentDomain.GetAssemblies().Single(
-                assembly => assembly.GetName().Name == "RemoteExecution.HybridCLR.Editor");
+            Assembly editor = typeof(HybridCLRRemoteExecutionEditorApi).Assembly;
             Type panel = editor.GetType("RemoteExecution.HybridCLR.HybridCLRRemoteExecutionPanel", true);
             string source = (string)panel.GetField("DefaultSource",
                 BindingFlags.Static | BindingFlags.NonPublic).GetRawConstantValue();
@@ -43,8 +42,19 @@ namespace RemoteExecution.Tests
                 var artifacts = (System.Collections.IList)output.GetType()
                     .GetProperty("Artifacts", BindingFlags.Instance | BindingFlags.NonPublic)
                     .GetValue(output);
-                names[i] = ((HybridCLRBundleArtifact)artifacts[0]).Name;
+                var artifact = (HybridCLRBundleArtifact)artifacts[0];
+                names[i] = artifact.Name;
                 Assert.That(names[i], Does.StartWith("RemoteExecution.Dynamic."));
+                if (i == 0) Assert.That(artifact.Pdb, Is.Not.Empty);
+                Assembly loaded = i == 0
+                    ? CurrentAssemblies.LoadFromBytes(artifact.Dll, artifact.Pdb)
+                    : CurrentAssemblies.LoadFromBytes(artifact.Dll);
+                Assert.That(loaded.GetName().Name, Is.EqualTo(artifact.Name));
+                Assert.That(loaded.GetTypes().Any(type =>
+                    typeof(IHybridCLRRemoteExecutionEntry).IsAssignableFrom(type)), Is.True,
+                    "Dynamic entries must share the project's runtime types.");
+                Assert.That(CurrentAssemblies.GetLoadedAssemblies(), Does.Contain(loaded),
+                    "Dynamic assemblies must be visible in the current Unity execution context.");
             }
             Assert.That(names[1], Is.Not.EqualTo(names[0]));
         }
@@ -81,8 +91,7 @@ namespace RemoteExecution.Tests
                         "The Editor Player did not publish the HybridCLR command.");
                     RemoteExecutionClientInfo player = RemoteExecutionEditorApi.GetClients().Single(item => item.IsReady);
 
-                    Assembly editor = AppDomain.CurrentDomain.GetAssemblies().Single(
-                        assembly => assembly.GetName().Name == "RemoteExecution.HybridCLR.Editor");
+                    Assembly editor = typeof(HybridCLRRemoteExecutionEditorApi).Assembly;
                     Type panel = editor.GetType("RemoteExecution.HybridCLR.HybridCLRRemoteExecutionPanel", true);
                     string source = (string)panel.GetField("DefaultSource",
                         BindingFlags.Static | BindingFlags.NonPublic).GetRawConstantValue();

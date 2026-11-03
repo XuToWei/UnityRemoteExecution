@@ -3,7 +3,7 @@
   "version": "0.4.0",
   "displayName": "Unity Remote Execution",
   "description": "Unity Editor to Player remote command and binary transfer bridge for development workflows.",
-  "unity": "2021.3",
+  "unity": "6000.6",
   "keywords": [
     "Unity",
     "remote-execution",

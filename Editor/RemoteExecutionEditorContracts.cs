@@ -159,7 +159,7 @@ namespace RemoteExecution
     {
         private static readonly object s_SelectionLock = new object();
         private static int s_SelectedSessionId;
-        private static int s_SelectionOwnerId;
+        private static object s_SelectionOwner;
 
         public static bool IsServerRunning => RemoteExecutionServer.IsRunning;
         public static string TransportKind => RemoteExecutionServer.TransportKind;
@@ -196,21 +196,22 @@ namespace RemoteExecution
             return RemoteExecutionServer.GetClients();
         }
 
-        internal static void SetSelectedSession(int ownerId, int sessionId)
+        internal static void SetSelectedSession(object owner, int sessionId)
         {
+            if (owner == null) throw new ArgumentNullException(nameof(owner));
             lock (s_SelectionLock)
             {
-                s_SelectionOwnerId = ownerId;
+                s_SelectionOwner = owner;
                 s_SelectedSessionId = sessionId;
             }
         }
 
-        internal static void ClearSelectedSession(int ownerId)
+        internal static void ClearSelectedSession(object owner)
         {
             lock (s_SelectionLock)
             {
-                if (s_SelectionOwnerId != ownerId) return;
-                s_SelectionOwnerId = 0;
+                if (!ReferenceEquals(s_SelectionOwner, owner)) return;
+                s_SelectionOwner = null;
                 s_SelectedSessionId = 0;
             }
         }

@@ -472,11 +472,19 @@ namespace RemoteExecution.Tests
             if (Mode == "synchronousTimeout")
             {
                 var watch = Stopwatch.StartNew();
-                while (watch.ElapsedMilliseconds < 1500)
+                try
                 {
-                    CancellationObserved |= cancellationToken.IsCancellationRequested;
-                    cancellationToken.ThrowIfCancellationRequested();
-                    Thread.SpinWait(128);
+                    while (watch.ElapsedMilliseconds < 1500)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        Thread.SpinWait(128);
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    // Record the observed exception; cancellation can race with a separate flag read.
+                    CancellationObserved = true;
+                    throw;
                 }
             }
             return Task.FromResult(RemoteCommandResult.Success("", context.Payload,

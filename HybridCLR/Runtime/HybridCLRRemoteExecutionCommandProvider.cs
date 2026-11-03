@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
+using UnityEngine.Assemblies;
 using UnityEngine.Scripting;
 
 namespace RemoteExecution.HybridCLR
@@ -45,7 +46,7 @@ namespace RemoteExecution.HybridCLR
                 if (s_Poisoned)
                     return RemoteCommandResult.Failure(
                         "PARTIAL_APPLY_RESTART_REQUIRED",
-                        "A previous HybridCLR load failed after changing the AppDomain. Restart the Player.");
+                        "A previous HybridCLR load failed after loading assemblies. Restart the Player.");
 
                 HybridCLRBundle bundle;
                 try { bundle = HybridCLRBundleCodec.Decode(context.Payload); }
@@ -95,10 +96,9 @@ namespace RemoteExecution.HybridCLR
         {
             entry = null;
             failure = null;
-            Dictionary<string, Assembly> loadedByName = AppDomain.CurrentDomain.GetAssemblies()
-                .Where(assembly => assembly != null && !string.IsNullOrEmpty(assembly.GetName().Name))
-                .GroupBy(assembly => assembly.GetName().Name, StringComparer.Ordinal)
-                .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+            var loadedNames = new HashSet<string>(CurrentAssemblies.GetLoadedAssemblies()
+                .Select(assembly => assembly?.GetName().Name)
+                .Where(name => !string.IsNullOrEmpty(name)), StringComparer.Ordinal);
             byte[] bundleSignature = ComputeBundleSignature(bundle);
             if (s_AppliedBundleContents.TryGetValue(bundle.BundleId,
                     out byte[] appliedBundleSignature) &&
@@ -128,7 +128,7 @@ namespace RemoteExecution.HybridCLR
                     }
                     continue;
                 }
-                if (loadedByName.ContainsKey(artifact.Name))
+                if (loadedNames.Contains(artifact.Name))
                 {
                     failure = RemoteCommandResult.Failure(
                         "ASSEMBLY_NAME_CONFLICT",
@@ -139,16 +139,16 @@ namespace RemoteExecution.HybridCLR
             }
 
             var newlyLoaded = new Dictionary<string, Assembly>(StringComparer.Ordinal);
-            bool changedAppDomain = false;
+            bool loadedAnyAssembly = false;
             try
             {
                 foreach (HybridCLRBundleArtifact artifact in pending)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     Assembly assembly = artifact.Pdb.Length > 0
-                        ? Assembly.Load(artifact.Dll, artifact.Pdb)
-                        : Assembly.Load(artifact.Dll);
-                    changedAppDomain = true;
+                        ? CurrentAssemblies.LoadFromBytes(artifact.Dll, artifact.Pdb)
+                        : CurrentAssemblies.LoadFromBytes(artifact.Dll);
+                    loadedAnyAssembly = true;
                     if (!string.Equals(assembly.GetName().Name, artifact.Name,
                         StringComparison.Ordinal))
                         throw new InvalidOperationException(
@@ -177,12 +177,12 @@ namespace RemoteExecution.HybridCLR
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                if (changedAppDomain) s_Poisoned = true;
+                if (loadedAnyAssembly) s_Poisoned = true;
                 throw;
             }
             catch (Exception exception)
             {
-                if (changedAppDomain)
+                if (loadedAnyAssembly)
                 {
                     s_Poisoned = true;
                     failure = RemoteCommandResult.Failure(

@@ -4,6 +4,7 @@
   "references": [
     "RemoteExecution.Runtime",
     "RemoteExecution.Editor",
+    "RemoteExecution.HybridCLR.Editor",
     "RemoteExecution.HybridCLR.Runtime",
     "HybridCLR.Editor"
   ],

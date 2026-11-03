@@ -4,6 +4,7 @@ using System.IO;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using UnityEngine.Assemblies;
 
 namespace RemoteExecution
 {
@@ -113,7 +114,7 @@ namespace RemoteExecution
         private static RemoteCommandCatalog DiscoverCommands()
         {
             var commandTypes = new List<Type>();
-            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+            foreach (Assembly assembly in CurrentAssemblies.GetLoadedAssemblies())
             {
                 foreach (Type type in RemoteCommandCatalog.GetLoadableTypes(assembly))
                 {
