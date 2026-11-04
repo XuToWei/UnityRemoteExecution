@@ -288,6 +288,44 @@ For `execute`, use the exact catalog `typeName` as `commandType`. Supply either 
 
 Without Bridge, neither command is compiled. Without HybridCLR, the general command and log search remain available but the C# command is absent. The adapters are Editor-only and add no Bridge dependency to the Player. `RemoteExecution.AgentBridge.Tests.Editor` provides optional tests when Bridge is installed.
 
+## Optional Unity CLI Loop integration
+
+Install [Unity CLI Loop](https://github.com/hatayama/unity-cli-loop) (`io.github.hatayama.uloopmcp` 3.x) in the same Unity project and set up its `uloop` CLI. The independent `UnityCLI/` Editor adapter does not require UnityAgentBridge. Both integrations can coexist and share the Editor listener and Player sessions.
+
+| CLI command | Capability |
+| --- | --- |
+| `remote-execution` | Listener status/start/stop, Players, command catalog, Player command execution and log search |
+| `remote-execution-csharp` | Compile C# and execute it on a Player when HybridCLR is also installed and enabled |
+
+Keep the target Unity project open with the CLI Loop connection service enabled:
+
+```bash
+uloop list --project-path /path/to/UnityProject
+uloop remote-execution --project-path /path/to/UnityProject --action start --port 38421
+uloop remote-execution --project-path /path/to/UnityProject --action status
+uloop remote-execution --project-path /path/to/UnityProject --action players
+uloop remote-execution --project-path /path/to/UnityProject --action commands --session-id 1
+uloop remote-execution --project-path /path/to/UnityProject --action search_logs --session-id 1 --query Exception
+```
+
+Replace `1` with a numeric `sessionId` from `players`. Players must still connect themselves using `RemoteExecutionPlayerApi.Start`. Start defaults to `--bind-address 127.0.0.1 --port 38421 --max-clients 4`; port `0` selects an available port shown by `status`. Repeated start returns `SERVER_ALREADY_RUNNING`; `--action stop` disconnects all Players. Omitting `--action` queries status. Use a reachable bind address for remote devices.
+
+```bash
+uloop remote-execution --project-path /path/to/UnityProject --action execute \
+  --session-id 1 --command-type RemoteExecution.SearchPlayerLogsCommand \
+  --payload-text NullReferenceException
+
+# macOS/Linux shell: pass the complete source as one argument.
+uloop remote-execution-csharp --project-path /path/to/UnityProject \
+  --session-id 1 --source "$(cat Probe.cs)"
+```
+
+Execute uses the exact catalog `typeName` and advertised content type. `--payload-text` and `--payload-base64` are mutually exclusive; omit both for an empty request. Log queries are limited to 4096 UTF-8 bytes. Responses contain CLI Loop's standard `Success` field and a `Result` object. Player failures also set `Success: false`; `Result` preserves `succeeded`, `code`, `message`, `contentType` and `payloadBytes`. Valid UTF-8 text/JSON returns `payloadText`, other data returns `payloadBase64`. Results over 64 KiB are written losslessly under the Editor project's `Library/RemoteExecution/UnityCLI/`, with an absolute `payloadFile` path; delete these artifacts when finished. Adapter validation, session and unavailable-command errors return `Success: false` with top-level `Code` and `Message`. CLI Loop handles type conversion, connection, compilation and timeout exceptions.
+
+C# source follows the same constraints as the AgentBridge command: at most 512 KiB UTF-8, implementing `IHybridCLRRemoteExecutionEntry` as shown below. Use `Debug.Log` for findings and `search_logs` to retrieve them. The tool shares the existing compiler, compilation lock and Player timeouts; allow up to 120 seconds for compilation plus the remote command timeout. CLI cancellation is passed through catalog refresh, command execution and compilation; compilation and Player cancellation remain cooperative. Keep Editor Play Mode running during execution: pausing prevents Player main-thread processing and the shared compilation workflow from progressing.
+
+Without CLI Loop 3.x, the adapter is excluded from compilation. Without HybridCLR, only the general tool is available. All new dependencies are Editor-only. Optional tests live in `RemoteExecution.UnityCLI.Tests.Editor` and `RemoteExecution.UnityCLI.HybridCLR.Tests.Editor`; neither requires AgentBridge.
+
 ## Optional HybridCLR adapter
 
 When `com.code-philosophy.hybridclr` is installed, the package's `versionDefines` activates the conditional adapter automatically. It adds a **HybridCLR** tool inside **Window > Remote Execution** and the Player command `RemoteExecution.HybridCLR.HybridCLRRemoteExecutionCommand`.

@@ -1,0 +1,30 @@
+{
+  "name": "RemoteExecution.UnityCLI.Tests.Editor",
+  "references": [
+    "RemoteExecution.Runtime",
+    "RemoteExecution.Editor",
+    "RemoteExecution.UnityCLI.Editor",
+    "UnityCLILoop.ToolContracts"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "autoReferenced": false,
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ],
+  "versionDefines": [
+    {
+      "name": "io.github.hatayama.uloopmcp",
+      "expression": "[3.0.0,4.0.0)",
+      "define": "REMOTE_EXECUTION_UNITY_CLI"
+    }
+  ],
+  "defineConstraints": [
+    "REMOTE_EXECUTION_UNITY_CLI"
+  ],
+  "overrideReferences": true,
+  "precompiledReferences": [
+    "Newtonsoft.Json.dll"
+  ]
+}

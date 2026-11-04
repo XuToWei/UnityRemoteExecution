@@ -290,6 +290,44 @@ Player 仍须由业务代码调用 `RemoteExecutionPlayerApi.Start` 连接；Bri
 
 未安装 Bridge 时两个 command 都不编译；只安装 Bridge 时通用命令与日志搜索可用，C# command 不编译。所有适配器均为 Editor-only，不向 Player 添加 Bridge 依赖。包测试额外提供 `RemoteExecution.AgentBridge.Tests.Editor`，仅在 Bridge 可用时启用。
 
+## 可选 Unity CLI Loop 集成
+
+在同一 Unity 工程安装 [Unity CLI Loop](https://github.com/hatayama/unity-cli-loop)（包名 `io.github.hatayama.uloopmcp`，3.x），并完成其 `uloop` CLI 安装。包内 `UnityCLI/` 是独立的 Editor 适配器，无需安装 UnityAgentBridge；两种集成也可以共存，共用当前 Editor 的监听和 Player 会话。
+
+| CLI command | 能力 |
+| --- | --- |
+| `remote-execution` | 监听状态/启停、Player 列表、命令目录、执行 Player 命令、搜索 Player 日志 |
+| `remote-execution-csharp` | 同时安装并启用 HybridCLR 时，编译 C# 并在 Player 执行 |
+
+保持目标 Unity 工程打开，启用 Unity CLI Loop 的连接服务，然后执行：
+
+```bash
+uloop list --project-path /path/to/UnityProject
+uloop remote-execution --project-path /path/to/UnityProject --action start --port 38421
+uloop remote-execution --project-path /path/to/UnityProject --action status
+uloop remote-execution --project-path /path/to/UnityProject --action players
+uloop remote-execution --project-path /path/to/UnityProject --action commands --session-id 1
+uloop remote-execution --project-path /path/to/UnityProject --action search_logs --session-id 1 --query Exception
+```
+
+将 `1` 替换成 `players` 返回的数字 `sessionId`。Player 仍须主动调用 `RemoteExecutionPlayerApi.Start` 连接。`start` 默认 `--bind-address 127.0.0.1 --port 38421 --max-clients 4`；`--port 0` 选择可用端口，可从 `status` 查看实际端点。重复启动返回 `SERVER_ALREADY_RUNNING`，`--action stop` 会停止监听并断开所有 Player。省略 `--action` 时只查询状态。真机连接时指定可达的监听地址。
+
+```bash
+uloop remote-execution --project-path /path/to/UnityProject --action execute \
+  --session-id 1 --command-type RemoteExecution.SearchPlayerLogsCommand \
+  --payload-text NullReferenceException
+
+# macOS/Linux shell：将完整源码作为参数传入。
+uloop remote-execution-csharp --project-path /path/to/UnityProject \
+  --session-id 1 --source "$(cat Probe.cs)"
+```
+
+`execute` 使用目录中的完整 `typeName` 和声明的 content type。`--payload-text` 与 `--payload-base64` 互斥，省略时发送空 payload。日志查询最多 4096 UTF-8 字节。工具返回 Unity CLI Loop 标准的 `Success` 字段以及 `Result` 对象；Player 执行失败时 `Success` 同样为 `false`，`Result` 中保留 `succeeded`、`code`、`message`、`contentType` 和 `payloadBytes`。有效 UTF-8 文本/JSON 返回 `payloadText`，其余返回 `payloadBase64`。超过 64 KiB 的结果保存到 Editor 工程的 `Library/RemoteExecution/UnityCLI/`，通过 `payloadFile` 返回绝对路径，读取后可自行删除。参数、会话及命令不可用等适配器错误返回 `Success: false` 和顶层 `Code`、`Message`；类型转换、连接、编译及超时异常由 CLI Loop 处理。
+
+`remote-execution-csharp` 的源码约束与 AgentBridge 版本相同：最大 512 KiB UTF-8，实现下文的 `IHybridCLRRemoteExecutionEntry`，使用 `Debug.Log` 输出结果后通过 `search_logs` 读取。它复用已有编译器、编译锁及 Player 超时，等待预算需覆盖最多 120 秒编译和远程命令执行。CLI 取消会传递给目录刷新、远程执行和编译 API；编译及 Player handler 的取消仍为协作式。Editor Play Mode 下执行需要保持运行，暂停会阻止 Player 的主线程处理和共享编译流程继续。
+
+未安装 CLI Loop 3.x 时适配器不编译；未安装 HybridCLR 时只启用通用工具。所有新增依赖均为 Editor-only。测试程序集为 `RemoteExecution.UnityCLI.Tests.Editor` 和可选的 `RemoteExecution.UnityCLI.HybridCLR.Tests.Editor`，不要求安装 AgentBridge。
+
 ## 可选 HybridCLR 适配器
 
 安装 `com.code-philosophy.hybridclr` 后，包内 `versionDefines` 会自动启用条件适配器。它会在 **Window > Remote Execution** 内增加 **HybridCLR** 工具，并在 Player 注册 `RemoteExecution.HybridCLR.HybridCLRRemoteExecutionCommand`。

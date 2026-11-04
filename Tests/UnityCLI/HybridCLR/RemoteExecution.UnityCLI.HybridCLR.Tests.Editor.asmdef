@@ -1,0 +1,39 @@
+{
+  "name": "RemoteExecution.UnityCLI.HybridCLR.Tests.Editor",
+  "references": [
+    "UnityCLILoop.ToolContracts",
+    "RemoteExecution.UnityCLI.Editor",
+    "RemoteExecution.UnityCLI.HybridCLR.Editor",
+    "RemoteExecution.Runtime",
+    "RemoteExecution.Editor",
+    "RemoteExecution.HybridCLR.Runtime",
+    "RemoteExecution.HybridCLR.Editor"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "autoReferenced": false,
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ],
+  "versionDefines": [
+    {
+      "name": "io.github.hatayama.uloopmcp",
+      "expression": "[3.0.0,4.0.0)",
+      "define": "REMOTE_EXECUTION_UNITY_CLI"
+    },
+    {
+      "name": "com.code-philosophy.hybridclr",
+      "expression": "1.0",
+      "define": "REMOTE_EXECUTION_HYBRIDCLR"
+    }
+  ],
+  "defineConstraints": [
+    "REMOTE_EXECUTION_UNITY_CLI",
+    "REMOTE_EXECUTION_HYBRIDCLR"
+  ],
+  "overrideReferences": true,
+  "precompiledReferences": [
+    "Newtonsoft.Json.dll"
+  ]
+}

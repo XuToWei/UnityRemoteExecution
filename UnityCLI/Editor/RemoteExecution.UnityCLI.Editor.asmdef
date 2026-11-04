@@ -1,0 +1,27 @@
+{
+  "name": "RemoteExecution.UnityCLI.Editor",
+  "rootNamespace": "RemoteExecution.UnityCLI",
+  "references": [
+    "RemoteExecution.Runtime",
+    "RemoteExecution.Editor",
+    "UnityCLILoop.ToolContracts"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "autoReferenced": true,
+  "versionDefines": [
+    {
+      "name": "io.github.hatayama.uloopmcp",
+      "expression": "[3.0.0,4.0.0)",
+      "define": "REMOTE_EXECUTION_UNITY_CLI"
+    }
+  ],
+  "defineConstraints": [
+    "REMOTE_EXECUTION_UNITY_CLI"
+  ],
+  "overrideReferences": true,
+  "precompiledReferences": [
+    "Newtonsoft.Json.dll"
+  ]
+}
