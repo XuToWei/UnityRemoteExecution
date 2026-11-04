@@ -29,7 +29,7 @@ namespace RemoteExecution.HybridCLR
         public static async Task<RemoteExecutionResult> ExecuteSourceAsync(int sessionId,
             string source, CancellationToken cancellationToken = default)
         {
-            if (!global::HybridCLR.Editor.Settings.HybridCLRSettings.Instance.enable)
+            if (!global::HybridCLR.Settings.HybridCLRSettings.instance.enable)
                 throw new InvalidOperationException("HybridCLR is disabled in project settings.");
             await RemoteExecutionEditorApi.RefreshCommandsAsync(sessionId, cancellationToken);
             RemoteExecutionClientInfo client = FindReadyClient(sessionId);

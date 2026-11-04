@@ -32,7 +32,7 @@ public sealed class RemoteExecutionEntry : IHybridCLRRemoteExecutionEntry
         public bool IsAvailable(RemoteExecutionEditorContext context,
             out string unavailableReason)
         {
-            bool enabled = global::HybridCLR.Editor.Settings.HybridCLRSettings.Instance.enable;
+            bool enabled = global::HybridCLR.Settings.HybridCLRSettings.instance.enable;
             unavailableReason = enabled ? string.Empty : "HybridCLR is disabled in project settings.";
             return enabled;
         }
